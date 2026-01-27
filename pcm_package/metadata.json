@@ -4,5 +4,24 @@
   "identifier": "com.github.ihysol.kicad-library-manager",
   "type": "plugin",
   "version": "1.2.0",
-  "kicad_version": "8.0"
+  "kicad_version": "9.0",
+  "description": "GUI/CLI tool to import, purge, and export component ZIPs into a KiCad template.",
+  "description_full": "wxPython-based GUI and CLI for importing, purging, and exporting component ZIPs into a KiCad template. Includes DRC template updates, board image rendering, and Mouser BOM ordering tools.",
+  "author": {
+    "name": "Ihysol",
+    "contact": {
+      "web": "https://github.com/Ihysol"
+    }
+  },
+  "maintainer": {
+    "name": "Ihysol",
+    "contact": {
+      "web": "https://github.com/Ihysol"
+    }
+  },
+  "license": "unrestricted",
+  "resources": {
+    "Homepage": "https://github.com/Ihysol/kicad-library-manager",
+    "Issues": "https://github.com/Ihysol/kicad-library-manager/issues"
+  }
 }
