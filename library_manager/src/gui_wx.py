@@ -13,24 +13,46 @@ import wx
 import wx.dataview as dv
 from sexpdata import Symbol, loads
 
-from gui_core import (
-    APP_VERSION,
-    AUTO_BORDER_KEY,
-    BORDER_MARGIN_KEY,
-    RENDER_PRESET_KEY,
-    USE_SYMBOLNAME_KEY,
-    SHOW_LOG_KEY,
-    export_symbols_with_checks,
-    list_project_symbols,
-    load_config,
-    open_folder_in_explorer,
-    open_output_folder,
-    process_archives,
-    save_config,
-    scan_zip_folder,
-    update_drc_rules,
-)
-from library_manager import INPUT_ZIP_FOLDER, PROJECT_DIR
+try:
+    from .gui_core import (
+        APP_VERSION,
+        AUTO_BORDER_KEY,
+        BORDER_MARGIN_KEY,
+        RENDER_PRESET_KEY,
+        USE_SYMBOLNAME_KEY,
+        SHOW_LOG_KEY,
+        export_symbols_with_checks,
+        list_project_symbols,
+        load_config,
+        open_folder_in_explorer,
+        open_output_folder,
+        process_archives,
+        save_config,
+        scan_zip_folder,
+        update_drc_rules,
+    )
+except ImportError:
+    from gui_core import (
+        APP_VERSION,
+        AUTO_BORDER_KEY,
+        BORDER_MARGIN_KEY,
+        RENDER_PRESET_KEY,
+        USE_SYMBOLNAME_KEY,
+        SHOW_LOG_KEY,
+        export_symbols_with_checks,
+        list_project_symbols,
+        load_config,
+        open_folder_in_explorer,
+        open_output_folder,
+        process_archives,
+        save_config,
+        scan_zip_folder,
+        update_drc_rules,
+    )
+try:
+    from .library_manager import INPUT_ZIP_FOLDER, PROJECT_DIR
+except ImportError:
+    from library_manager import INPUT_ZIP_FOLDER, PROJECT_DIR
 
 # ===============================
 # Logging

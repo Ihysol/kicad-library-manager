@@ -26,8 +26,8 @@ from typing import Any, Dict, List, Set, Tuple
 from sexpdata import Symbol, loads
 
 try:
-    # Preferred: real project environment
-    from library_manager import (
+    # Preferred: real project environment (package import)
+    from .library_manager import (
         INPUT_ZIP_FOLDER,
         PROJECT_FOOTPRINT_LIB,
         PROJECT_SYMBOL_LIB,
@@ -36,22 +36,34 @@ try:
         process_zip,
         purge_zip_contents,
     )
-except ImportError:  # pragma: no cover - fallback for isolated editing
-    INPUT_ZIP_FOLDER = Path.cwd() / "library_input"
-    PROJECT_SYMBOL_LIB = Path.cwd() / "ProjectSymbols.kicad_sym"
-    PROJECT_FOOTPRINT_LIB = Path.cwd() / "ProjectFootprints.pretty"
+except ImportError:
+    try:
+        # Fallback: direct import for standalone runs
+        from library_manager import (
+            INPUT_ZIP_FOLDER,
+            PROJECT_FOOTPRINT_LIB,
+            PROJECT_SYMBOL_LIB,
+            export_symbols,
+            get_existing_main_symbols,
+            process_zip,
+            purge_zip_contents,
+        )
+    except ImportError:  # pragma: no cover - fallback for isolated editing
+        INPUT_ZIP_FOLDER = Path.cwd() / "library_input"
+        PROJECT_SYMBOL_LIB = Path.cwd() / "ProjectSymbols.kicad_sym"
+        PROJECT_FOOTPRINT_LIB = Path.cwd() / "ProjectFootprints.pretty"
 
-    def get_existing_main_symbols() -> Set[str]:
-        return set()
+        def get_existing_main_symbols() -> Set[str]:
+            return set()
 
-    def process_zip(*args, **kwargs):  # type: ignore
-        raise RuntimeError("library_manager not available")
+        def process_zip(*args, **kwargs):  # type: ignore
+            raise RuntimeError("library_manager not available")
 
-    def purge_zip_contents(*args, **kwargs):  # type: ignore
-        raise RuntimeError("library_manager not available")
+        def purge_zip_contents(*args, **kwargs):  # type: ignore
+            raise RuntimeError("library_manager not available")
 
-    def export_symbols(*args, **kwargs):  # type: ignore
-        raise RuntimeError("library_manager not available")
+        def export_symbols(*args, **kwargs):  # type: ignore
+            raise RuntimeError("library_manager not available")
 
 # =========================
 # Logging
@@ -400,13 +412,17 @@ def update_drc_rules() -> bool:
         logger.info(f"Detected {layer_count} copper layers.")
 
         dru_template_dir = None
-        for parent in [cwd] + list(cwd.parents):
+        preferred_roots = [
+            Path(__file__).resolve().parent,
+        ]
+        for parent in preferred_roots + [cwd] + list(cwd.parents):
             cand = parent / "dru_templates"
             if cand.exists() and cand.is_dir():
                 dru_template_dir = cand
                 break
         if not dru_template_dir:
             logger.error("[ERROR] No 'dru_templates' folder found.")
+            logger.error("[INFO] Ensure dru_templates is bundled with the plugin package or present near the project.")
             return False
 
         src = next(

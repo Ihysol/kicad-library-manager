@@ -1,0 +1,8 @@
+{
+  "$schema": "https://go.kicad.org/pcm/schemas/v1",
+  "name": "KiCad Library Manager",
+  "identifier": "com.github.ihysol.kicad-library-manager",
+  "type": "plugin",
+  "version": "1.2.0",
+  "kicad_version": "8.0"
+}

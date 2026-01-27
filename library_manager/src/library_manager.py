@@ -10,7 +10,11 @@ import zipfile
 from uuid import uuid4
 from pathlib import Path
 from datetime import datetime
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except Exception:
+    def load_dotenv(*_args, **_kwargs):  # type: ignore
+        return False
 from sexpdata import loads, dumps, Symbol
 
 # ==========
@@ -1708,13 +1712,25 @@ def export_symbols(selected_symbols: list[str]) -> list[Path]:
 
 load_dotenv()
 
-_base_path = (
-    Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve().parent
-)
+env_project_dir = os.getenv("KLM_PROJECT_DIR")
+env_base_path = os.getenv("KLM_BASE_PATH")
+if env_project_dir:
+    _base_path = Path(env_project_dir).resolve()
+elif env_base_path:
+    _base_path = Path(env_base_path).resolve()
+else:
+    _base_path = (
+        Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve().parent
+    )
 
-project_file = find_upward("*.kicad_pro", _base_path)
-if not project_file:
-    raise RuntimeError("No KiCad project (*.kicad_pro) found.")
+if env_project_dir:
+    project_file = find_upward("*.kicad_pro", _base_path)
+    if not project_file:
+        raise RuntimeError("No KiCad project (*.kicad_pro) found in KLM_PROJECT_DIR.")
+else:
+    project_file = find_upward("*.kicad_pro", _base_path)
+    if not project_file:
+        raise RuntimeError("No KiCad project (*.kicad_pro) found.")
 
 PROJECT_DIR = project_file.parent
 PROJECT_SYMBOL_LIB = PROJECT_DIR / "symbols" / "ProjectSymbols.kicad_sym"
@@ -1725,9 +1741,7 @@ PROJECT_FOOTPRINT_LIB_NAME = PROJECT_FOOTPRINT_LIB.stem
 input_folder_name = os.getenv("INPUT_ZIP_FOLDER", "library_input")
 INPUT_ZIP_FOLDER = find_upward(input_folder_name, _base_path)
 if INPUT_ZIP_FOLDER is None:
-    raise RuntimeError(
-        f'Input folder "{input_folder_name}" not found in current or parent directories.'
-    )
+    INPUT_ZIP_FOLDER = PROJECT_DIR / input_folder_name
 
 TEMP_MAP_FILE = INPUT_ZIP_FOLDER / "footprint_to_symbol_map.json"
 
