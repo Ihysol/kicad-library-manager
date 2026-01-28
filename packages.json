@@ -1,4 +1,4 @@
-﻿{
+{
   "$schema": "https://go.kicad.org/pcm/schemas/v1",
   "packages": [
     {
@@ -30,9 +30,9 @@
           "status": "stable",
           "kicad_version": "9.0",
           "download_url": "https://github.com/Ihysol/kicad-library-manager/releases/download/1.2.0/kicad-library-manager-1.2.0.zip",
-          "download_sha256": "c033fc4fbb62f1438e90ebe847677da6d8efb8ddd5242b3bd7c73151b8f6c516",
-          "download_size": 58589,
-          "install_size": 247141
+          "download_sha256": "3726150a995b4813b346c97248458abb5e03b5b608a103bf2319c2429f4b9254",
+          "download_size": 58630,
+          "install_size": 247266
         }
       ]
     }

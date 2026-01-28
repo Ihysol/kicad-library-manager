@@ -11,7 +11,7 @@ class KiCadLibraryManager(pcbnew.ActionPlugin):
         self.category = "Library"
         self.description = "Manage KiCad library ZIP imports/exports and project utilities."
         self.show_toolbar_button = True
-        icon = Path(__file__).resolve().parents[1] / "resources" / "icon.png"
+        icon = Path(__file__).resolve().parents[3] / "icon.png"
         if icon.exists():
             self.icon_file_name = str(icon)
 
