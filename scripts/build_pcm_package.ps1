@@ -20,10 +20,7 @@ if (Test-Path $resourcesPath) {
     Copy-Item -Recurse -Force $resourcesPath (Join-Path $stageDir "resources")
 }
 
-$pluginPkg = Join-Path $stageDir "plugins\\com_github_ihysol_kicad-library-manager"
-if (!(Test-Path $pluginPkg)) {
-    New-Item -ItemType Directory -Force -Path $pluginPkg | Out-Null
-}
+$pluginPkg = Join-Path $stageDir "plugins"
 Copy-Item -Recurse -Force (Join-Path $repoRoot "library_manager\\src\\*") $pluginPkg
 $druTemplates = Join-Path $repoRoot "library_manager\\dru_templates"
 if (Test-Path $druTemplates) {

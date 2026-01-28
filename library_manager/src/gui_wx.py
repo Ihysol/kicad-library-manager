@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 
 import multiprocessing as mp
+import queue as pyqueue
 import wx
 import wx.dataview as dv
 from sexpdata import Symbol, loads
@@ -50,9 +51,9 @@ except ImportError:
         update_drc_rules,
     )
 try:
-    from .library_manager import INPUT_ZIP_FOLDER, PROJECT_DIR
+    from .library_manager import INPUT_ZIP_FOLDER, PROJECT_DIR, KLM_DATA_DIR
 except ImportError:
-    from library_manager import INPUT_ZIP_FOLDER, PROJECT_DIR
+    from library_manager import INPUT_ZIP_FOLDER, PROJECT_DIR, KLM_DATA_DIR
 
 # ===============================
 # Logging
@@ -96,6 +97,57 @@ for h in list(logger.handlers):
 
 # --- Do not propagate logs to root (prevents duplication) ---
 logger.propagate = False
+
+USE_MULTIPROCESSING = True
+
+
+def _init_multiprocessing():
+    global USE_MULTIPROCESSING
+    try:
+        import pcbnew  # noqa: F401
+        # KiCad's embedded Python + spawn causes "unknown option 'E'"
+        USE_MULTIPROCESSING = False
+        return
+    except Exception:
+        pass
+
+    if os.name == "nt":
+        exe = Path(sys.executable).name.lower()
+        if "kicad" in exe:
+            py = Path(sys.executable).with_name("python.exe")
+            if py.exists():
+                mp.set_executable(str(py))
+            else:
+                USE_MULTIPROCESSING = False
+
+
+def _make_queue():
+    if USE_MULTIPROCESSING:
+        return mp.get_context("spawn").Queue()
+    return pyqueue.Queue()
+
+
+def _start_worker(target, args):
+    if USE_MULTIPROCESSING:
+        ctx = mp.get_context("spawn")
+        proc = ctx.Process(target=target, args=args)
+        proc.start()
+        return proc
+    thread = threading.Thread(target=target, args=args, daemon=True)
+    thread.start()
+    return thread
+
+
+def _import_mouser():
+    try:
+        from . import mouser_integration as mouser
+    except Exception:
+        import mouser_integration as mouser
+    return mouser
+
+
+# Initialize multiprocessing mode on import to avoid KiCad spawn issues.
+_init_multiprocessing()
 
 
 # --- Shared icon helper for buttons ---
@@ -356,8 +408,8 @@ def _generate_bom_worker(schematic_path: str, bom_path: str, queue) -> None:
 
 def _parse_bom_worker(bom_path: str, group_by_field: str | None, queue) -> None:
     try:
-        from mouser_integration import BOMHandler
-        handler = BOMHandler()
+        mouser = _import_mouser()
+        handler = mouser.BOMHandler()
         data = handler.process_bom_file(bom_path, group_by_field=group_by_field)
         queue.put(("ok", data))
     except Exception as e:
@@ -369,7 +421,7 @@ def _submit_order_worker(data_for_order: dict, queue) -> None:
     import contextlib
     import time as _time
     try:
-        import mouser_integration as mouser
+        mouser = _import_mouser()
         client = mouser.MouserOrderClient()
 
         class QueueWriter:
@@ -410,6 +462,7 @@ class BoardPreviewPanel(wx.Panel):
     """Panel that draws a scaled bitmap and interactive crop rectangle overlay."""
     def __init__(self, parent, on_crop_change=None, on_select=None, on_reset=None):
         super().__init__(parent, style=wx.BORDER_SIMPLE)
+        self.SetBackgroundStyle(wx.BG_STYLE_PAINT)
         self._bmp = None
         self._scaled = None
         self._last_size = wx.Size(0, 0)
@@ -477,9 +530,14 @@ class BoardPreviewPanel(wx.Panel):
         return self._scaled
 
     def _on_paint(self, event):
-        dc = wx.PaintDC(self)
+        dc = wx.BufferedPaintDC(self)
         dc.SetBackground(wx.Brush(self.GetBackgroundColour()))
         dc.Clear()
+        gdc = None
+        try:
+            gdc = wx.GCDC(dc)
+        except Exception:
+            gdc = None
 
         bmp = self._get_scaled_bitmap()
         if bmp:
@@ -497,29 +555,33 @@ class BoardPreviewPanel(wx.Panel):
             rect_y1 = y + int(bmp.GetHeight() * y1 / 100)
             rect_w = max(rect_x1 - rect_x0, 1)
             rect_h = max(rect_y1 - rect_y0, 1)
-            dc.SetBrush(wx.TRANSPARENT_BRUSH)
             dc.SetPen(wx.Pen(wx.Colour(220, 50, 50), 2))
-            dc.DrawRectangle(rect_x0, rect_y0, rect_w, rect_h)
+            # Draw outline using lines to avoid any accidental fill on some backends.
+            dc.DrawLine(rect_x0, rect_y0, rect_x1, rect_y0)
+            dc.DrawLine(rect_x0, rect_y1, rect_x1, rect_y1)
+            dc.DrawLine(rect_x0, rect_y0, rect_x0, rect_y1)
+            dc.DrawLine(rect_x1, rect_y0, rect_x1, rect_y1)
 
         if self._loading:
             panel_size = self.GetClientSize()
-            dc.SetBrush(wx.Brush(wx.Colour(0, 0, 0, 80)))
-            dc.SetPen(wx.TRANSPARENT_PEN)
-            dc.DrawRectangle(0, 0, panel_size.width, panel_size.height)
-            dc.SetTextForeground(wx.Colour(255, 255, 255))
-            dc.DrawLabel(self._loading_text, wx.Rect(0, 0, panel_size.width, panel_size.height), alignment=wx.ALIGN_CENTER)
+            target = gdc if gdc else dc
+            target.SetBrush(wx.Brush(wx.Colour(0, 0, 0, 80)))
+            target.SetPen(wx.TRANSPARENT_PEN)
+            target.DrawRectangle(0, 0, panel_size.width, panel_size.height)
+            target.SetTextForeground(wx.Colour(255, 255, 255))
+            target.DrawLabel(self._loading_text, wx.Rect(0, 0, panel_size.width, panel_size.height), alignment=wx.ALIGN_CENTER)
             if self._loading_progress is not None:
                 bar_w = max(panel_size.width // 2, 120)
                 bar_h = 10
                 x = (panel_size.width - bar_w) // 2
                 y = (panel_size.height // 2) + 18
-                dc.SetBrush(wx.Brush(wx.Colour(255, 255, 255, 80)))
-                dc.SetPen(wx.Pen(wx.Colour(255, 255, 255, 120)))
-                dc.DrawRectangle(x, y, bar_w, bar_h)
+                target.SetBrush(wx.Brush(wx.Colour(255, 255, 255, 80)))
+                target.SetPen(wx.Pen(wx.Colour(255, 255, 255, 120)))
+                target.DrawRectangle(x, y, bar_w, bar_h)
                 fill_w = int(bar_w * self._loading_progress / 100)
-                dc.SetBrush(wx.Brush(wx.Colour(80, 200, 120, 200)))
-                dc.SetPen(wx.TRANSPARENT_PEN)
-                dc.DrawRectangle(x, y, fill_w, bar_h)
+                target.SetBrush(wx.Brush(wx.Colour(80, 200, 120, 200)))
+                target.SetPen(wx.TRANSPARENT_PEN)
+                target.DrawRectangle(x, y, fill_w, bar_h)
 
     def _on_left_down(self, event):
         if not self._image_rect:
@@ -1363,13 +1425,11 @@ class MainFrame(wx.Frame):
             return
         self.append_log("[INFO] Refreshing project symbol list...")
         self._set_symbols_busy(True)
-        ctx = mp.get_context("spawn")
-        self._sym_list_queue = ctx.Queue()
-        self._sym_list_process = ctx.Process(
-            target=_list_symbols_worker,
-            args=(self._sym_list_queue,),
+        self._sym_list_queue = _make_queue()
+        self._sym_list_process = _start_worker(
+            _list_symbols_worker,
+            (self._sym_list_queue,),
         )
-        self._sym_list_process.start()
         if not self._sym_list_timer:
             self._sym_list_timer = wx.Timer(self)
             self.Bind(wx.EVT_TIMER, self._on_sym_list_poll, self._sym_list_timer)
@@ -1394,13 +1454,11 @@ class MainFrame(wx.Frame):
         if self._sym_busy:
             return
         self._set_symbols_busy(True)
-        ctx = mp.get_context("spawn")
-        self._sym_export_queue = ctx.Queue()
-        self._sym_export_process = ctx.Process(
-            target=_export_symbols_worker,
-            args=(selected_symbols, self._sym_export_queue),
+        self._sym_export_queue = _make_queue()
+        self._sym_export_process = _start_worker(
+            _export_symbols_worker,
+            (selected_symbols, self._sym_export_queue),
         )
-        self._sym_export_process.start()
         if not self._sym_export_timer:
             self._sym_export_timer = wx.Timer(self)
             self.Bind(wx.EVT_TIMER, self._on_sym_export_poll, self._sym_export_timer)
@@ -1426,13 +1484,11 @@ class MainFrame(wx.Frame):
         if self._sym_busy:
             return
         self._set_symbols_busy(True)
-        ctx = mp.get_context("spawn")
-        self._sym_delete_queue = ctx.Queue()
-        self._sym_delete_process = ctx.Process(
-            target=_delete_symbols_worker,
-            args=(selected_symbols, self._sym_delete_queue),
+        self._sym_delete_queue = _make_queue()
+        self._sym_delete_process = _start_worker(
+            _delete_symbols_worker,
+            (selected_symbols, self._sym_delete_queue),
         )
-        self._sym_delete_process.start()
         if not self._sym_delete_timer:
             self._sym_delete_timer = wx.Timer(self)
             self.Bind(wx.EVT_TIMER, self._on_sym_delete_poll, self._sym_delete_timer)
@@ -1466,10 +1522,8 @@ class MainFrame(wx.Frame):
         if self._drc_busy:
             return
         self._set_drc_busy(True)
-        ctx = mp.get_context("spawn")
-        self._drc_queue = ctx.Queue()
-        self._drc_process = ctx.Process(target=_update_drc_worker, args=(self._drc_queue,))
-        self._drc_process.start()
+        self._drc_queue = _make_queue()
+        self._drc_process = _start_worker(_update_drc_worker, (self._drc_queue,))
         if not self._drc_timer:
             self._drc_timer = wx.Timer(self)
             self.Bind(wx.EVT_TIMER, self._on_drc_poll, self._drc_timer)
@@ -1500,13 +1554,11 @@ class MainFrame(wx.Frame):
         self._start_zip_scan()
 
     def _start_zip_scan(self):
-        ctx = mp.get_context("spawn")
-        self._zip_scan_queue = ctx.Queue()
-        self._zip_scan_process = ctx.Process(
-            target=_scan_zip_folder_worker,
-            args=(str(self.current_folder), self._zip_scan_queue),
+        self._zip_scan_queue = _make_queue()
+        self._zip_scan_process = _start_worker(
+            _scan_zip_folder_worker,
+            (str(self.current_folder), self._zip_scan_queue),
         )
-        self._zip_scan_process.start()
         if not self._zip_scan_timer:
             self._zip_scan_timer = wx.Timer(self)
             self.Bind(wx.EVT_TIMER, self._on_zip_scan_poll, self._zip_scan_timer)
@@ -1532,11 +1584,10 @@ class MainFrame(wx.Frame):
             return
         self.append_log("[INFO] Processing ZIP archives in background...")
         self._set_zip_busy(True)
-        ctx = mp.get_context("spawn")
-        self._zip_process_queue = ctx.Queue()
-        self._zip_process = ctx.Process(
-            target=_process_archives_worker,
-            args=(
+        self._zip_process_queue = _make_queue()
+        self._zip_process = _start_worker(
+            _process_archives_worker,
+            (
                 [str(p) for p in paths],
                 is_purge,
                 False,
@@ -1544,7 +1595,6 @@ class MainFrame(wx.Frame):
                 self._zip_process_queue,
             ),
         )
-        self._zip_process.start()
         if not self._zip_process_timer:
             self._zip_process_timer = wx.Timer(self)
             self.Bind(wx.EVT_TIMER, self._on_zip_process_poll, self._zip_process_timer)
@@ -1948,7 +1998,7 @@ class MainFrame(wx.Frame):
             self.append_log("[ERROR] No generated PNGs available to save.")
             return
 
-        dst_dir = PROJECT_DIR.parent / "Docs" / "img"
+        dst_dir = KLM_DATA_DIR / "Docs" / "img"
         dst_dir.mkdir(parents=True, exist_ok=True)
         dst_top = dst_dir / "board_preview_top.png"
         dst_bottom = dst_dir / "board_preview_bottom.png"
@@ -2487,8 +2537,7 @@ class MouserAutoOrderTab(wx.Panel):
         setting multiplier, and submitting orders. Also sets up the data view.
         """
         super().__init__(parent)
-        import mouser_integration as mouser  # heavy import: defer until tab creation
-        self.mouser = mouser
+        self.mouser = _import_mouser()  # heavy import: defer until tab creation
         self.log_callback = log_callback
         self.bom_handler = self.mouser.BOMHandler() # BOM parsing utility
         self.order_client = self.mouser.MouserOrderClient() # Mouser order API client
@@ -2643,13 +2692,11 @@ class MouserAutoOrderTab(wx.Panel):
             return
         self._set_mouser_busy(True)
         bom_path = self.temp_bom_dir / f"{schematic_path.stem}_bom.csv"
-        ctx = mp.get_context("spawn")
-        self._bom_generate_queue = ctx.Queue()
-        self._bom_generate_process = ctx.Process(
-            target=_generate_bom_worker,
-            args=(str(schematic_path), str(bom_path), self._bom_generate_queue),
+        self._bom_generate_queue = _make_queue()
+        self._bom_generate_process = _start_worker(
+            _generate_bom_worker,
+            (str(schematic_path), str(bom_path), self._bom_generate_queue),
         )
-        self._bom_generate_process.start()
         if not self._bom_generate_timer:
             self._bom_generate_timer = wx.Timer(self)
             self.Bind(wx.EVT_TIMER, self._on_bom_generate_poll, self._bom_generate_timer)
@@ -2674,14 +2721,12 @@ class MouserAutoOrderTab(wx.Panel):
         if not self._mouser_busy:
             self._set_mouser_busy(True)
         self._log_ui(f"[INFO] Loading BOM: {bom_path}")
-        ctx = mp.get_context("spawn")
         group_by = self._get_group_by_field()
-        self._bom_parse_queue = ctx.Queue()
-        self._bom_parse_process = ctx.Process(
-            target=_parse_bom_worker,
-            args=(bom_path, group_by, self._bom_parse_queue),
+        self._bom_parse_queue = _make_queue()
+        self._bom_parse_process = _start_worker(
+            _parse_bom_worker,
+            (bom_path, group_by, self._bom_parse_queue),
         )
-        self._bom_parse_process.start()
         if not self._bom_parse_timer:
             self._bom_parse_timer = wx.Timer(self)
             self.Bind(wx.EVT_TIMER, self._on_bom_parse_poll, self._bom_parse_timer)
@@ -2706,13 +2751,11 @@ class MouserAutoOrderTab(wx.Panel):
         if self._mouser_busy:
             return
         self._set_mouser_busy(True)
-        ctx = mp.get_context("spawn")
-        self._order_queue = ctx.Queue()
-        self._order_process = ctx.Process(
-            target=_submit_order_worker,
-            args=(data_for_order, self._order_queue),
+        self._order_queue = _make_queue()
+        self._order_process = _start_worker(
+            _submit_order_worker,
+            (data_for_order, self._order_queue),
         )
-        self._order_process.start()
         if not self._order_timer:
             self._order_timer = wx.Timer(self)
             self.Bind(wx.EVT_TIMER, self._on_order_poll, self._order_timer)
@@ -3237,6 +3280,7 @@ class MouserAutoOrderTab(wx.Panel):
 # ===============================
 class KiCadApp(wx.App):
     def OnInit(self):
+        _init_multiprocessing()
         self.frame = MainFrame()
         self.frame.Show()
         return True

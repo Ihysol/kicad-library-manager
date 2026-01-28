@@ -49,7 +49,7 @@ except ImportError:
             purge_zip_contents,
         )
     except ImportError:  # pragma: no cover - fallback for isolated editing
-        INPUT_ZIP_FOLDER = Path.cwd() / "library_input"
+        INPUT_ZIP_FOLDER = Path.cwd() / "klm_data" / "library_input"
         PROJECT_SYMBOL_LIB = Path.cwd() / "ProjectSymbols.kicad_sym"
         PROJECT_FOOTPRINT_LIB = Path.cwd() / "ProjectFootprints.pretty"
 

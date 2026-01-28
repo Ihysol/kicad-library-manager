@@ -1,4 +1,5 @@
 import os
+import sys
 from pathlib import Path
 
 import pcbnew
@@ -15,6 +16,7 @@ class KiCadLibraryManager(pcbnew.ActionPlugin):
             self.icon_file_name = str(icon)
 
     def Run(self):
+        _ensure_vendor_path()
         try:
             import wx
         except Exception as exc:
@@ -68,6 +70,18 @@ def _find_icon_path():
             break
 
     return None
+
+
+def _ensure_vendor_path():
+    plugin_dir = Path(__file__).resolve().parent
+    plugin_path = str(plugin_dir)
+    if plugin_path not in sys.path:
+        sys.path.insert(0, plugin_path)
+    vendor_dir = plugin_dir / "vendor"
+    if vendor_dir.exists():
+        vendor_path = str(vendor_dir)
+        if vendor_path not in sys.path:
+            sys.path.insert(0, vendor_path)
 
 
 KiCadLibraryManager().register()

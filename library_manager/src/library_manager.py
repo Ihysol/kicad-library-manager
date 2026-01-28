@@ -1738,14 +1738,15 @@ PROJECT_FOOTPRINT_LIB = PROJECT_DIR / "footprints" / "ProjectFootprints.pretty"
 PROJECT_3D_DIR = PROJECT_DIR / "3dmodels"
 PROJECT_FOOTPRINT_LIB_NAME = PROJECT_FOOTPRINT_LIB.stem
 
+data_root_name = os.getenv("KLM_DATA_DIR", "klm_data")
+KLM_DATA_DIR = PROJECT_DIR / data_root_name
 input_folder_name = os.getenv("INPUT_ZIP_FOLDER", "library_input")
-INPUT_ZIP_FOLDER = find_upward(input_folder_name, _base_path)
-if INPUT_ZIP_FOLDER is None:
-    INPUT_ZIP_FOLDER = PROJECT_DIR / input_folder_name
+INPUT_ZIP_FOLDER = KLM_DATA_DIR / input_folder_name
 
 TEMP_MAP_FILE = INPUT_ZIP_FOLDER / "footprint_to_symbol_map.json"
 
 os.makedirs(PROJECT_SYMBOL_LIB.parent, exist_ok=True)
 os.makedirs(PROJECT_FOOTPRINT_LIB, exist_ok=True)
 os.makedirs(PROJECT_3D_DIR, exist_ok=True)
+os.makedirs(KLM_DATA_DIR, exist_ok=True)
 os.makedirs(INPUT_ZIP_FOLDER, exist_ok=True)
