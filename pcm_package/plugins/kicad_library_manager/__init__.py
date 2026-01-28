@@ -2,7 +2,6 @@ import os
 from pathlib import Path
 
 import pcbnew
-import wx
 
 
 class KiCadLibraryManager(pcbnew.ActionPlugin):
@@ -11,11 +10,17 @@ class KiCadLibraryManager(pcbnew.ActionPlugin):
         self.category = "Library"
         self.description = "Manage KiCad library ZIP imports/exports and project utilities."
         self.show_toolbar_button = True
-        icon = Path(__file__).resolve().parents[3] / "icon.png"
-        if icon.exists():
+        icon = _find_icon_path()
+        if icon:
             self.icon_file_name = str(icon)
 
     def Run(self):
+        try:
+            import wx
+        except Exception as exc:
+            print(f"KiCad Library Manager: wxPython not available: {exc}")
+            return
+
         board = pcbnew.GetBoard()
         project_dir = None
         if board:
@@ -44,6 +49,25 @@ class KiCadLibraryManager(pcbnew.ActionPlugin):
                 "KiCad Library Manager",
                 wx.OK | wx.ICON_ERROR,
             )
+
+
+def _find_icon_path():
+    here = Path(__file__).resolve()
+    # Package layout: <root>/plugins/kicad_library_manager/__init__.py
+    pkg_icon = here.parents[2] / "resources" / "icon.png"
+    if pkg_icon.exists():
+        return pkg_icon
+
+    # Installed PCM layout: <user>/.../3rdparty/plugins/<id>/kicad_library_manager
+    identifier = "com_github_ihysol_kicad-library-manager"
+    for parent in here.parents:
+        if parent.name.lower() == "3rdparty":
+            installed_icon = parent / "resources" / identifier / "icon.png"
+            if installed_icon.exists():
+                return installed_icon
+            break
+
+    return None
 
 
 KiCadLibraryManager().register()
