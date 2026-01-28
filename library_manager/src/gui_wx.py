@@ -1998,7 +1998,7 @@ class MainFrame(wx.Frame):
             self.append_log("[ERROR] No generated PNGs available to save.")
             return
 
-        dst_dir = KLM_DATA_DIR / "Docs" / "img"
+        dst_dir = KLM_DATA_DIR / "imgs"
         dst_dir.mkdir(parents=True, exist_ok=True)
         dst_top = dst_dir / "board_preview_top.png"
         dst_bottom = dst_dir / "board_preview_bottom.png"
