@@ -22,6 +22,8 @@ class KiCadLibraryManager(pcbnew.ActionPlugin):
         except Exception as exc:
             print(f"KiCad Library Manager: wxPython not available: {exc}")
             return
+        if _focus_existing_window(wx):
+            return
 
         board = pcbnew.GetBoard()
         project_dir = None
@@ -44,7 +46,10 @@ class KiCadLibraryManager(pcbnew.ActionPlugin):
         try:
             from . import gui_wx
 
-            gui_wx.MainFrame()
+            if hasattr(gui_wx, "get_or_create_main_frame"):
+                gui_wx.get_or_create_main_frame()
+            else:
+                gui_wx.MainFrame()
         except Exception as exc:
             wx.MessageBox(
                 f"Failed to start KiCad Library Manager:\n{exc}",
@@ -82,6 +87,28 @@ def _ensure_vendor_path():
         vendor_path = str(vendor_dir)
         if vendor_path not in sys.path:
             sys.path.insert(0, vendor_path)
+
+
+def _focus_existing_window(wx_mod) -> bool:
+    """Bring an existing GUI window to the foreground if it's already open."""
+    try:
+        for win in wx_mod.GetTopLevelWindows():
+            try:
+                title = win.GetTitle()
+            except Exception:
+                continue
+            if "KiCad Library Manager" in title:
+                try:
+                    win.Show(True)
+                    win.Iconize(False)
+                    win.Raise()
+                    win.RequestUserAttention()
+                except Exception:
+                    pass
+                return True
+    except Exception:
+        return False
+    return False
 
 
 KiCadLibraryManager().register()

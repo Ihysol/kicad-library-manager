@@ -355,6 +355,11 @@ class MouserOrderClient:
         row_count = min(len(refs), len(qtys), len(mnrs))
 
         for idx in range(row_count):
+            mnr = mnrs[idx] if idx < len(mnrs) else ""
+            if "~" in str(mnr):
+                ref = refs[idx] if idx < len(refs) else "?"
+                print(f"{ICON_WARN} Skipping {ref} due to excluded MNR: {mnr}")
+                continue
             try:
                 base_qty = int(qtys[idx])
             except Exception as e:
@@ -368,7 +373,7 @@ class MouserOrderClient:
                     extra_qty = 0
             items.append(
                 {
-                    "MouserPartNumber": mnrs[idx] if idx < len(mnrs) else "",
+                    "MouserPartNumber": mnr,
                     "Quantity": base_qty * multiplier + extra_qty,
                     "CustomerPartNumber": refs[idx] if idx < len(refs) else "",
                 }

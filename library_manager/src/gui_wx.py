@@ -99,6 +99,7 @@ for h in list(logger.handlers):
 logger.propagate = False
 
 USE_MULTIPROCESSING = True
+_MAIN_FRAME = None  # Track the singleton GUI instance for ActionPlugin reuse.
 
 
 def _init_multiprocessing():
@@ -144,6 +145,45 @@ def _import_mouser():
     except Exception:
         import mouser_integration as mouser
     return mouser
+
+
+def _focus_frame(frame: wx.Frame) -> None:
+    """Bring an existing frame to the foreground if possible."""
+    try:
+        frame.Show(True)
+        frame.Iconize(False)
+        frame.Raise()
+        frame.RequestUserAttention()
+    except Exception:
+        pass
+
+
+def get_or_create_main_frame() -> "MainFrame":
+    """Return existing main frame or create a new one."""
+    global _MAIN_FRAME
+    if _MAIN_FRAME:
+        try:
+            if _MAIN_FRAME.IsBeingDeleted():
+                _MAIN_FRAME = None
+        except Exception:
+            _MAIN_FRAME = None
+    if _MAIN_FRAME:
+        _focus_frame(_MAIN_FRAME)
+        return _MAIN_FRAME
+    frame = MainFrame()
+    _MAIN_FRAME = frame
+
+    def _on_close(evt):
+        nonlocal frame
+        global _MAIN_FRAME
+        try:
+            evt.Skip()
+        finally:
+            if _MAIN_FRAME is frame:
+                _MAIN_FRAME = None
+
+    frame.Bind(wx.EVT_CLOSE, _on_close)
+    return frame
 
 
 # Initialize multiprocessing mode on import to avoid KiCad spawn issues.
@@ -716,7 +756,15 @@ class BoardPreviewPanel(wx.Panel):
 # ===============================
 class MainFrame(wx.Frame):
     def __init__(self):
-        super().__init__(None, title=f"KiCad Library Manager (wxPython) - {APP_VERSION}", size=(1120, 800))
+        style = wx.CAPTION | wx.CLOSE_BOX | wx.MINIMIZE_BOX | wx.SYSTEM_MENU | wx.CLIP_CHILDREN
+        super().__init__(
+            None,
+            title=f"KiCad Library Manager (wxPython) - {APP_VERSION}",
+            size=(1120, 800),
+            style=style,
+        )
+        self._locked_size = None
+        self._locking_size = False
         self.current_folder = INPUT_ZIP_FOLDER.resolve()
         self.zip_rows = []
         self._zip_busy = False
@@ -732,9 +780,31 @@ class MainFrame(wx.Frame):
         self._configure_logger()
         self.Centre()
         self.Show()
+        self.Bind(wx.EVT_SIZE, self._enforce_fixed_size)
+        wx.CallAfter(self._lock_window_size)
 
         # Kick off background load so the frame appears immediately
         threading.Thread(target=self._post_init_load, daemon=True).start()
+
+    def _lock_window_size(self):
+        """Lock the window size after layout has settled."""
+        size = self.GetSize()
+        self._locked_size = size
+        self.SetMinSize(size)
+        self.SetMaxSize(size)
+
+    def _enforce_fixed_size(self, event):
+        """Prevent user resizing even if the OS still shows resize affordances."""
+        if self._locking_size:
+            event.Skip()
+            return
+        if self._locked_size and self.GetSize() != self._locked_size:
+            self._locking_size = True
+            try:
+                self.SetSize(self._locked_size)
+            finally:
+                self._locking_size = False
+        event.Skip()
 
     def _post_init_load(self):
         """Load config and initial data without blocking the UI thread."""
