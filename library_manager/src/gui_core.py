@@ -69,7 +69,7 @@ except ImportError:
 # Logging
 # =========================
 logger = logging.getLogger("kicad_library_manager")
-APP_VERSION = "v1.2a"
+APP_VERSION = "v1.3"
 
 
 def ensure_logger(handler: logging.Handler | None = None, level: int = logging.INFO) -> None:
@@ -94,6 +94,12 @@ SHOW_LOG_KEY = "show_log"
 AUTO_BORDER_KEY = "auto_border_on_generate"
 BORDER_MARGIN_KEY = "auto_border_margin_px"
 RENDER_PRESET_KEY = "render_preset_idx"
+SCH_EXPORT_FORMAT_KEY = "sch_export_format"
+SCH_EXPORT_MODE_KEY = "sch_export_mode"
+SCH_EXPORT_FRAME_KEY = "sch_export_frame"
+LAYER_EXPORT_FORMAT_KEY = "layer_export_format"
+LAYER_EXPORT_MODE_KEY = "layer_export_mode"
+LAYER_EXPORT_FRAME_KEY = "layer_export_frame"
 
 
 def load_config() -> Dict[str, Any]:
@@ -109,6 +115,12 @@ def load_config() -> Dict[str, Any]:
     cfg.setdefault(AUTO_BORDER_KEY, True)
     cfg.setdefault(BORDER_MARGIN_KEY, 20)
     cfg.setdefault(RENDER_PRESET_KEY, 1)
+    cfg.setdefault(SCH_EXPORT_FORMAT_KEY, "pdf")
+    cfg.setdefault(SCH_EXPORT_MODE_KEY, "both")
+    cfg.setdefault(SCH_EXPORT_FRAME_KEY, True)
+    cfg.setdefault(LAYER_EXPORT_FORMAT_KEY, "svg")
+    cfg.setdefault(LAYER_EXPORT_MODE_KEY, "both")
+    cfg.setdefault(LAYER_EXPORT_FRAME_KEY, True)
     return cfg
 
 

@@ -1,9 +1,44 @@
-{
+﻿{
   "$schema": "https://go.kicad.org/pcm/schemas/v1",
   "name": "KiCad Library Manager",
   "packages": {
     "url": "https://ihysol.github.io/kicad-library-manager/packages.json",
-    "update_timestamp": 1770038232,
-    "update_time_utc": "2026-02-02 13:17:12"
+    "update_timestamp": 1770636909,
+    "update_time_utc": "2026-02-09 11:35:09"
   }
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

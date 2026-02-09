@@ -22,6 +22,12 @@ try:
         RENDER_PRESET_KEY,
         USE_SYMBOLNAME_KEY,
         SHOW_LOG_KEY,
+        SCH_EXPORT_FORMAT_KEY,
+        SCH_EXPORT_MODE_KEY,
+        SCH_EXPORT_FRAME_KEY,
+        LAYER_EXPORT_FORMAT_KEY,
+        LAYER_EXPORT_MODE_KEY,
+        LAYER_EXPORT_FRAME_KEY,
         export_symbols_with_checks,
         list_project_symbols,
         load_config,
@@ -40,6 +46,14 @@ except ImportError:
         RENDER_PRESET_KEY,
         USE_SYMBOLNAME_KEY,
         SHOW_LOG_KEY,
+        SCH_EXPORT_FORMAT_KEY,
+        SCH_EXPORT_MODE_KEY,
+        SCH_EXPORT_FRAME_KEY,
+        SCH_EXPORT_PDF_SINGLE_KEY,
+        LAYER_EXPORT_FORMAT_KEY,
+        LAYER_EXPORT_MODE_KEY,
+        LAYER_EXPORT_FRAME_KEY,
+        LAYER_EXPORT_PDF_SINGLE_KEY,
         export_symbols_with_checks,
         list_project_symbols,
         load_config,
@@ -70,6 +84,29 @@ if not hasattr(sys, "stdout") or sys.stdout is None:
 
 logger = logging.getLogger("kicad_library_manager")
 logger.setLevel(logging.DEBUG)
+logger.info(f"[DEBUG] Loaded gui_wx.py from: {__file__}")
+
+
+def _set_bold_labels(*controls: wx.Control) -> None:
+    """Apply bold font to button-like controls."""
+    for ctrl in controls:
+        try:
+            font = ctrl.GetFont()
+            if font:
+                font.SetWeight(wx.FONTWEIGHT_BOLD)
+                ctrl.SetFont(font)
+        except Exception:
+            pass
+
+
+def _tint_actions_box(box_sizer: wx.StaticBoxSizer, color: wx.Colour) -> None:
+    """Apply a subtle background tint to an Actions section."""
+    try:
+        box = box_sizer.GetStaticBox()
+        if box:
+            box.SetBackgroundColour(color)
+    except Exception:
+        pass
 
 # --- Formatter with auto-clean for duplicate prefixes ---
 class CleanFormatter(logging.Formatter):
@@ -467,7 +504,10 @@ def _export_schematics_pdf_worker(
     schematic_paths: list[str],
     output_dir: str,
     project_dir: str,
-    queue
+    queue,
+    export_format: str = "pdf",
+    include_frame: bool = True,
+    export_mode: str = "single",
 ) -> None:
     try:
         kicad_cli = _find_kicad_cli_path()
@@ -481,13 +521,119 @@ def _export_schematics_pdf_worker(
         ok_count = 0
         errors = []
         warnings = []
+        fmt = (export_format or "pdf").lower()
+        mode = (export_mode or "single").lower()
+        if mode in ("combined", "both") and len(schematic_paths) > 1:
+            warnings.append("Combined schematic export is not supported; exporting individual files only.")
+        converter, convert_mode = _find_svg_converter_path()
 
         for idx, sch in enumerate(schematic_paths, start=1):
             sch_path = Path(sch)
+            label = sch_path.name
             try:
-                queue.put(("log", f"[INFO] Exporting PDF {idx}/{total}: {sch_path.name}"))
+                queue.put(("log", f"[INFO] Exporting {fmt.upper()} {idx}/{total}: {label}"))
             except Exception:
                 pass
+            if fmt == "svg":
+                cmd = [
+                    kicad_cli,
+                    "sch",
+                    "export",
+                    "svg",
+                    str(sch_path),
+                    "--output",
+                    str(out_dir),
+                    "-D",
+                    f"KIPRJMOD={project_dir}",
+                ]
+                if not include_frame:
+                    cmd.append("--exclude-drawing-sheet")
+                res = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    cwd=project_dir,
+                    **_subprocess_no_window_kwargs(),
+                )
+                if res.returncode != 0:
+                    err = res.stderr.strip() or res.stdout.strip() or "Unknown error"
+                    errors.append(f"{label}: {err}")
+                    continue
+                matches = list(out_dir.glob(f"{sch_path.stem}*.svg"))
+                if matches:
+                    ok_count += 1
+                else:
+                    errors.append(f"{label}: SVG not generated.")
+                continue
+
+            if fmt == "png":
+                cmd = [
+                    kicad_cli,
+                    "sch",
+                    "export",
+                    "svg",
+                    str(sch_path),
+                    "--output",
+                    str(out_dir),
+                    "-D",
+                    f"KIPRJMOD={project_dir}",
+                ]
+                if not include_frame:
+                    cmd.append("--exclude-drawing-sheet")
+                res = subprocess.run(
+                    cmd,
+                    capture_output=True,
+                    text=True,
+                    cwd=project_dir,
+                    **_subprocess_no_window_kwargs(),
+                )
+                if res.returncode != 0:
+                    err = res.stderr.strip() or res.stdout.strip() or "Unknown error"
+                    errors.append(f"{label}: {err}")
+                    continue
+                if not converter:
+                    errors.append(f"{label}: No SVG converter found (magick/rsvg/inkscape).")
+                    continue
+                svg_matches = list(out_dir.glob(f"{sch_path.stem}*.svg"))
+                if not svg_matches:
+                    errors.append(f"{label}: SVG not generated.")
+                    continue
+                converted_any = False
+                for svg_path in svg_matches:
+                    png_path = svg_path.with_suffix(".png")
+                    try:
+                        if convert_mode == "magick":
+                            subprocess.run(
+                                [converter, str(svg_path), str(png_path)],
+                                capture_output=True,
+                                text=True,
+                                **_subprocess_no_window_kwargs(),
+                            )
+                        elif convert_mode == "rsvg":
+                            subprocess.run(
+                                [converter, str(svg_path), "-o", str(png_path)],
+                                capture_output=True,
+                                text=True,
+                                **_subprocess_no_window_kwargs(),
+                            )
+                        elif convert_mode == "inkscape":
+                            subprocess.run(
+                                [converter, str(svg_path), "--export-type=png", f"--export-filename={png_path}"],
+                                capture_output=True,
+                                text=True,
+                                **_subprocess_no_window_kwargs(),
+                            )
+                    except Exception as e:
+                        warnings.append(f"{label}: SVG conversion failed: {e}")
+                        continue
+                    if png_path.exists():
+                        converted_any = True
+                if converted_any:
+                    ok_count += 1
+                else:
+                    errors.append(f"{label}: PNG not generated.")
+                continue
+
             out_path = out_dir / f"{sch_path.stem}.pdf"
             cmd = [
                 kicad_cli,
@@ -500,6 +646,8 @@ def _export_schematics_pdf_worker(
                 "-D",
                 f"KIPRJMOD={project_dir}",
             ]
+            if not include_frame:
+                cmd.append("--exclude-drawing-sheet")
             res = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -511,14 +659,14 @@ def _export_schematics_pdf_worker(
                 err = res.stderr.strip() or res.stdout.strip() or "Unknown error"
                 if out_path.exists():
                     ok_count += 1
-                    warnings.append(f"{sch_path.name}: {err}")
+                    warnings.append(f"{label}: {err}")
                     continue
-                errors.append(f"{sch_path.name}: {err}")
+                errors.append(f"{label}: {err}")
                 continue
             if out_path.exists():
                 ok_count += 1
             else:
-                errors.append(f"{sch_path.name}: PDF not generated.")
+                errors.append(f"{label}: PDF not generated.")
 
         queue.put(("ok", ok_count, errors, warnings))
     except Exception as e:
@@ -530,7 +678,10 @@ def _export_layers_img_worker(
     layers: list[str],
     output_dir: str,
     project_dir: str,
-    queue
+    queue,
+    export_format: str = "png",
+    include_frame: bool = True,
+    export_mode: str = "single",
 ) -> None:
     try:
         kicad_cli = _find_kicad_cli_path()
@@ -544,16 +695,13 @@ def _export_layers_img_worker(
         ok_count = 0
         errors = []
         warnings = []
-        converter, mode = _find_svg_converter_path()
+        fmt = (export_format or "png").lower()
+        mode = (export_mode or "single").lower()
+        do_single = mode in ("single", "both")
+        do_combined = mode in ("combined", "both")
+        converter, convert_mode = _find_svg_converter_path()
 
-        for idx, layer in enumerate(layers, start=1):
-            safe_layer = layer.replace("/", "_")
-            try:
-                queue.put(("log", f"[INFO] Exporting layer {idx}/{total}: {layer}"))
-            except Exception:
-                pass
-            svg_path = out_dir / f"{Path(pcb_path).stem}_{safe_layer}.svg"
-            png_path = out_dir / f"{Path(pcb_path).stem}_{safe_layer}.png"
+        def _svg_cmd(output_path: Path, layer_list: list[str], mode_single: bool) -> list[str]:
             cmd = [
                 kicad_cli,
                 "pcb",
@@ -561,13 +709,38 @@ def _export_layers_img_worker(
                 "svg",
                 str(pcb_path),
                 "--output",
-                str(svg_path),
+                str(output_path),
                 "--layers",
-                layer,
-                "--mode-single",
+                ",".join(layer_list),
                 "-D",
                 f"KIPRJMOD={project_dir}",
             ]
+            if mode_single:
+                cmd.append("--mode-single")
+            if not include_frame:
+                cmd += ["--exclude-drawing-sheet", "--page-size-mode", "2"]
+            return cmd
+
+        def _pdf_cmd(output_path: Path, layer_list: list[str]) -> list[str]:
+            cmd = [
+                kicad_cli,
+                "pcb",
+                "export",
+                "pdf",
+                str(pcb_path),
+                "--output",
+                str(output_path),
+                "--layers",
+                ",".join(layer_list),
+                "-D",
+                f"KIPRJMOD={project_dir}",
+                "--mode-single",
+            ]
+            if include_frame:
+                cmd.append("--include-border-title")
+            return cmd
+
+        def _run_cmd(cmd: list[str], label: str) -> tuple[bool, str]:
             res = subprocess.run(
                 cmd,
                 capture_output=True,
@@ -577,55 +750,167 @@ def _export_layers_img_worker(
             )
             if res.returncode != 0:
                 err = res.stderr.strip() or res.stdout.strip() or "Unknown error"
-                if png_path.exists():
-                    ok_count += 1
-                    warnings.append(f"{layer}: {err}")
-                    continue
-                errors.append(f"{layer}: {err}")
-                continue
+                return False, f"{label}: {err}"
+            return True, ""
 
-            if converter:
+        def _normalize_pdf_output(target_path: Path, stem_fallback: str) -> None:
+            """If kicad-cli creates a directory for multipage PDF, move the file into target_path."""
+            try:
+                if not target_path.exists() or target_path.is_file():
+                    return
+                pdf_candidates = list(target_path.glob("*.pdf"))
+                if not pdf_candidates:
+                    alt = target_path / f"{stem_fallback}.pdf"
+                    if alt.exists():
+                        pdf_candidates = [alt]
+                if not pdf_candidates:
+                    return
+                src = pdf_candidates[0]
+                dst = target_path.with_suffix(".pdf") if target_path.suffix.lower() != ".pdf" else target_path
                 try:
-                    if mode == "magick":
-                        subprocess.run(
-                            [converter, str(svg_path), str(png_path)],
-                            capture_output=True,
-                            text=True,
-                            **_subprocess_no_window_kwargs(),
-                        )
-                    elif mode == "rsvg":
-                        subprocess.run(
-                            [converter, str(svg_path), "-o", str(png_path)],
-                            capture_output=True,
-                            text=True,
-                            **_subprocess_no_window_kwargs(),
-                        )
-                    elif mode == "inkscape":
-                        subprocess.run(
-                            [converter, str(svg_path), "--export-type=png", f"--export-filename={png_path}"],
-                            capture_output=True,
-                            text=True,
-                            **_subprocess_no_window_kwargs(),
-                        )
-                except Exception as e:
+                    if dst.exists():
+                        dst.unlink()
+                except Exception:
+                    pass
+                shutil.move(str(src), str(dst))
+                try:
+                    for child in target_path.iterdir():
+                        try:
+                            if child.is_file():
+                                child.unlink()
+                        except Exception:
+                            pass
+                    target_path.rmdir()
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
+        def _convert_svg_to_png(svg_path: Path, png_path: Path, label: str) -> tuple[bool, str, bool]:
+            if not converter:
+                return False, f"{label}: No SVG converter found (magick/rsvg/inkscape).", False
+            try:
+                if convert_mode == "magick":
+                    subprocess.run(
+                        [converter, str(svg_path), str(png_path)],
+                        capture_output=True,
+                        text=True,
+                        **_subprocess_no_window_kwargs(),
+                    )
+                elif convert_mode == "rsvg":
+                    subprocess.run(
+                        [converter, str(svg_path), "-o", str(png_path)],
+                        capture_output=True,
+                        text=True,
+                        **_subprocess_no_window_kwargs(),
+                    )
+                elif convert_mode == "inkscape":
+                    subprocess.run(
+                        [converter, str(svg_path), "--export-type=png", f"--export-filename={png_path}"],
+                        capture_output=True,
+                        text=True,
+                        **_subprocess_no_window_kwargs(),
+                    )
+            except Exception as e:
+                return False, f"{label}: SVG conversion failed: {e}", True
+            return True, "", True
+
+        pcb_stem = Path(pcb_path).stem
+
+        def _log(msg: str) -> None:
+            try:
+                queue.put(("log", msg))
+            except Exception:
+                pass
+
+        if do_single:
+            for idx, layer in enumerate(layers, start=1):
+                safe_layer = layer.replace("/", "_")
+                _log(f"[INFO] Exporting layer {idx}/{total}: {layer}")
+                if fmt == "svg":
+                    svg_path = out_dir / f"{pcb_stem}_{safe_layer}.svg"
+                    ok, err = _run_cmd(_svg_cmd(svg_path, [layer], True), layer)
+                    if ok and svg_path.exists():
+                        ok_count += 1
+                    elif ok:
+                        errors.append(f"{layer}: SVG not generated.")
+                    else:
+                        errors.append(err)
+                elif fmt == "pdf":
+                    pdf_path = out_dir / f"{pcb_stem}_{safe_layer}.pdf"
+                    ok, err = _run_cmd(_pdf_cmd(pdf_path, [layer]), layer)
+                    if ok and pdf_path.exists():
+                        ok_count += 1
+                    elif ok:
+                        errors.append(f"{layer}: PDF not generated.")
+                    else:
+                        errors.append(err)
+                else:
+                    svg_path = out_dir / f"{pcb_stem}_{safe_layer}.svg"
+                    png_path = out_dir / f"{pcb_stem}_{safe_layer}.png"
+                    ok, err = _run_cmd(_svg_cmd(svg_path, [layer], True), layer)
+                    if not ok:
+                        errors.append(err)
+                        continue
+                    ok_conv, err_conv, used = _convert_svg_to_png(svg_path, png_path, layer)
+                    if not ok_conv:
+                        if png_path.exists():
+                            ok_count += 1
+                            warnings.append(err_conv)
+                            continue
+                        if used:
+                            errors.append(err_conv)
+                        else:
+                            errors.append(err_conv)
+                        continue
                     if png_path.exists():
                         ok_count += 1
-                        warnings.append(f"{layer}: SVG conversion failed: {e}")
-                        continue
-                    errors.append(f"{layer}: SVG conversion failed: {e}")
-                    continue
-            else:
-                if png_path.exists():
-                    ok_count += 1
-                    warnings.append(f"{layer}: No SVG converter found (magick/rsvg/inkscape).")
-                    continue
-                errors.append(f"{layer}: No SVG converter found (magick/rsvg/inkscape).")
-                continue
+                    else:
+                        errors.append(f"{layer}: PNG export failed.")
 
-            if png_path.exists():
-                ok_count += 1
+        if do_combined:
+            combined_label = "combined"
+            if fmt == "svg":
+                svg_path = out_dir / f"{pcb_stem}_combined.svg"
+                _log("[INFO] Exporting combined layers...")
+                ok, err = _run_cmd(_svg_cmd(svg_path, layers, True), combined_label)
+                if ok and svg_path.exists():
+                    ok_count += 1
+                elif ok:
+                    errors.append("Combined SVG not generated.")
+                else:
+                    errors.append(err)
+            elif fmt == "pdf":
+                pdf_path = out_dir / f"{pcb_stem}_combined.pdf"
+                _log("[INFO] Exporting combined layers...")
+                ok, err = _run_cmd(_pdf_cmd(pdf_path, layers), combined_label)
+                if ok:
+                    _normalize_pdf_output(pdf_path, pcb_stem)
+                if ok and pdf_path.exists():
+                    ok_count += 1
+                elif ok:
+                    errors.append("Combined PDF not generated.")
+                else:
+                    errors.append(err)
             else:
-                errors.append(f"{layer}: PNG export failed.")
+                svg_path = out_dir / f"{pcb_stem}_combined.svg"
+                png_path = out_dir / f"{pcb_stem}_combined.png"
+                _log("[INFO] Exporting combined layers...")
+                ok, err = _run_cmd(_svg_cmd(svg_path, layers, True), combined_label)
+                if not ok:
+                    errors.append(err)
+                else:
+                    ok_conv, err_conv, used = _convert_svg_to_png(svg_path, png_path, combined_label)
+                    if not ok_conv:
+                        if png_path.exists():
+                            ok_count += 1
+                            warnings.append(err_conv)
+                        else:
+                            errors.append(err_conv)
+                    elif png_path.exists():
+                        ok_count += 1
+                    else:
+                        errors.append("Combined PNG not generated.")
 
         queue.put(("ok", ok_count, errors, warnings))
     except Exception as e:
@@ -1072,10 +1357,11 @@ class MainFrame(wx.Frame):
         box1 = wx.StaticBox(self.tab_zip, label="Select Archive Folder")
         s1 = wx.StaticBoxSizer(box1, wx.VERTICAL)
         h_buttons = wx.BoxSizer(wx.HORIZONTAL)
-        self.btn_select = wx.Button(self.tab_zip, label="Select ZIP Folder")
-        self.btn_open = wx.Button(self.tab_zip, label="Open ZIP Folder")
+        self.btn_select = wx.Button(self.tab_zip, label="SELECT ZIP FOLDER")
+        self.btn_open = wx.Button(self.tab_zip, label="OPEN ZIP FOLDER")
         set_button_icon(self.btn_select, wx.ART_NEW_DIR)
         set_button_icon(self.btn_open, wx.ART_FOLDER_OPEN)
+        _set_bold_labels(self.btn_select, self.btn_open)
         h_buttons.Add(self.btn_select, 0, wx.RIGHT, 8)
         h_buttons.Add(self.btn_open, 0)
         self.current_folder_txt = wx.StaticText(
@@ -1083,7 +1369,6 @@ class MainFrame(wx.Frame):
         )
         s1.Add(h_buttons, 0, wx.BOTTOM, 5)
         s1.Add(self.current_folder_txt, 0, wx.TOP, 2)
-        self.zip_vbox.Add(s1, 0, wx.EXPAND | wx.ALL, 8)
 
         # === Top controls ===
         h_zip_top = wx.BoxSizer(wx.HORIZONTAL)
@@ -1125,10 +1410,20 @@ class MainFrame(wx.Frame):
         self.btn_purge = wx.Button(self.tab_zip, label="PURGE / DELETE")
         set_button_icon(self.btn_process, wx.ART_GO_FORWARD)
         set_button_icon(self.btn_purge, wx.ART_DELETE)
+        self.btn_process.SetMinSize((-1, 32))
+        self.btn_purge.SetMinSize((-1, 32))
+        _set_bold_labels(self.btn_process, self.btn_purge)
+        actions_tint = wx.Colour(238, 250, 246)
+        zip_actions_box = wx.StaticBoxSizer(wx.VERTICAL, self.tab_zip, "Actions")
+        h_zip_actions = wx.BoxSizer(wx.HORIZONTAL)
         h_zip_btns = wx.BoxSizer(wx.HORIZONTAL)
         h_zip_btns.Add(self.btn_process, 0, wx.RIGHT, 8)
         h_zip_btns.Add(self.btn_purge, 0)
-        self.zip_vbox.Add(h_zip_btns, 0, wx.TOP, 5)
+        h_zip_actions.Add(h_zip_btns, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
+        h_zip_actions.Add(s1, 1, wx.EXPAND)
+        zip_actions_box.Add(h_zip_actions, 1, wx.ALL | wx.EXPAND, 6)
+        _tint_actions_box(zip_actions_box, actions_tint)
+        self.zip_vbox.Add(zip_actions_box, 0, wx.EXPAND | wx.TOP, 5)
 
         self.tab_zip.SetSizer(self.zip_vbox)
 
@@ -1163,6 +1458,10 @@ class MainFrame(wx.Frame):
         set_button_icon(self.btn_export, wx.ART_FILE_SAVE_AS)
         set_button_icon(self.btn_open_output, wx.ART_FOLDER_OPEN)
         set_button_icon(self.btn_delete_orphans, wx.ART_DELETE)
+        self.btn_export.SetMinSize((-1, 32))
+        self.btn_open_output.SetMinSize((-1, 32))
+        self.btn_delete_orphans.SetMinSize((-1, 32))
+        _set_bold_labels(self.btn_export, self.btn_open_output, self.btn_delete_orphans)
         self.tab_symbol.Layout()
         self.btn_delete_orphans.SetForegroundColour(wx.RED)
 
@@ -1170,20 +1469,32 @@ class MainFrame(wx.Frame):
         self.btn_delete_selected = wx.Button(self.tab_symbol, label="DELETE SELECTED")
         set_button_icon(self.btn_delete_selected, wx.ART_DELETE)
         self.btn_delete_selected.SetForegroundColour(wx.RED)
+        self.btn_delete_selected.SetMinSize((-1, 32))
+        _set_bold_labels(self.btn_delete_selected)
 
+        sym_actions_box = wx.StaticBoxSizer(wx.VERTICAL, self.tab_symbol, "Actions")
         h_sym_btns.Add(self.btn_export, 0, wx.RIGHT, 8)
         h_sym_btns.Add(self.btn_open_output, 0, wx.RIGHT, 8)
         h_sym_btns.Add(self.btn_delete_selected, 0)
-        self.sym_vbox.Add(h_sym_btns, 0, wx.TOP, 5)
+        sym_actions_box.Add(h_sym_btns, 0, wx.ALL, 6)
+        _tint_actions_box(sym_actions_box, actions_tint)
+        self.sym_vbox.Add(sym_actions_box, 0, wx.EXPAND | wx.TOP, 5)
         self.tab_symbol.SetSizer(self.sym_vbox)
 
 
         # --- DRC tab content ---
         self.drc_vbox = wx.BoxSizer(wx.VERTICAL)
-        self.btn_drc = wx.Button(self.tab_drc, label="Update DRC Rules")
+        self.btn_drc = wx.Button(self.tab_drc, label="UPDATE DRC RULES")
         set_button_icon(self.btn_drc, wx.ART_TICK_MARK)
+        self.btn_drc.SetMinSize((-1, 32))
+        _set_bold_labels(self.btn_drc)
         self.drc_vbox.Add(wx.StaticText(self.tab_drc, label="Auto-Apply DRC Rules Based on PCB Layer Count:"), 0, wx.BOTTOM, 5)
-        self.drc_vbox.Add(self.btn_drc, 0, wx.BOTTOM, 5)
+        drc_actions_box = wx.StaticBoxSizer(wx.VERTICAL, self.tab_drc, "Actions")
+        h_drc_actions = wx.BoxSizer(wx.HORIZONTAL)
+        h_drc_actions.Add(self.btn_drc, 0)
+        drc_actions_box.Add(h_drc_actions, 0, wx.ALL, 6)
+        _tint_actions_box(drc_actions_box, actions_tint)
+        self.drc_vbox.Add(drc_actions_box, 0, wx.EXPAND | wx.BOTTOM, 5)
         self.tab_drc.SetSizer(self.drc_vbox)
 
         # --- Generate Images from PCB tab content ---
@@ -1206,20 +1517,25 @@ class MainFrame(wx.Frame):
         self.board_controls.Add(
             wx.StaticText(self.tab_board_images, label="Generate top/bottom board images from .kicad_pcb:"),
             0,
-            wx.ALIGN_CENTER_VERTICAL | wx.RIGHT,
-            12,
+            wx.ALIGN_CENTER_VERTICAL,
         )
-        self.btn_generate_board = wx.Button(self.tab_board_images, label="Generate from .kicad_pcb")
+        self.board_vbox.Add(self.board_controls, 0, wx.EXPAND | wx.LEFT | wx.RIGHT | wx.TOP, 8)
+
+        self.btn_generate_board = wx.Button(self.tab_board_images, label="GENERATE FROM .KICAD_PCB")
         set_button_icon(self.btn_generate_board, wx.ART_EXECUTABLE_FILE)
-        self.btn_render_custom = wx.Button(self.tab_board_images, label="Crop to Frame")
+        self.btn_render_custom = wx.Button(self.tab_board_images, label="CROP TO FRAME")
         set_button_icon(self.btn_render_custom, wx.ART_EXECUTABLE_FILE)
-        self.btn_save_board = wx.Button(self.tab_board_images, label="Save Previews")
+        self.btn_save_board = wx.Button(self.tab_board_images, label="SAVE PREVIEWS")
         set_button_icon(self.btn_save_board, wx.ART_FILE_SAVE_AS)
+        self.btn_open_board_folder = wx.Button(self.tab_board_images, label="OPEN OUTPUT FOLDER")
+        set_button_icon(self.btn_open_board_folder, wx.ART_FOLDER_OPEN)
+        self.btn_generate_board.SetMinSize((-1, 32))
+        self.btn_render_custom.SetMinSize((-1, 32))
+        self.btn_save_board.SetMinSize((-1, 32))
+        self.btn_open_board_folder.SetMinSize((-1, 32))
+        _set_bold_labels(self.btn_generate_board, self.btn_render_custom, self.btn_save_board)
+        _set_bold_labels(self.btn_open_board_folder)
         self._board_has_images = False
-        self.board_controls.Add(self.btn_generate_board, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
-        self.board_controls.Add(self.btn_render_custom, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
-        self.board_controls.Add(self.btn_save_board, 0, wx.ALIGN_CENTER_VERTICAL)
-        self.board_vbox.Add(self.board_controls, 0, wx.EXPAND | wx.ALL, 8)
 
         self.board_sizes_box = wx.StaticBoxSizer(wx.VERTICAL, self.tab_board_images, "Render Resolution")
         self.board_sizes = wx.FlexGridSizer(cols=4, vgap=4, hgap=8)
@@ -1337,6 +1653,15 @@ class MainFrame(wx.Frame):
         self.board_hbox.Add(self.board_image_panel_top, 1, wx.EXPAND | wx.ALL, 8)
         self.board_hbox.Add(self.board_image_panel_bottom, 1, wx.EXPAND | wx.ALL, 8)
         self.board_vbox.Add(self.board_hbox, 1, wx.EXPAND)
+        self.board_actions_box = wx.StaticBoxSizer(wx.VERTICAL, self.tab_board_images, "Actions")
+        self.board_actions = wx.BoxSizer(wx.HORIZONTAL)
+        self.board_actions.Add(self.btn_generate_board, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
+        self.board_actions.Add(self.btn_render_custom, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
+        self.board_actions.Add(self.btn_save_board, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
+        self.board_actions.Add(self.btn_open_board_folder, 0, wx.ALIGN_CENTER_VERTICAL)
+        self.board_actions_box.Add(self.board_actions, 0, wx.ALL, 6)
+        _tint_actions_box(self.board_actions_box, actions_tint)
+        self.board_vbox.Add(self.board_actions_box, 0, wx.EXPAND | wx.ALL, 8)
         self.tab_board_images.SetSizer(self.board_vbox)
 
         # --- Export Schematics sub-tab content ---
@@ -1347,6 +1672,9 @@ class MainFrame(wx.Frame):
         self.chk_master_schematics = wx.CheckBox(self.tab_export_schematic, label="Select All")
         h_sch_top.Add(self.btn_refresh_schematics, 0, wx.RIGHT, 8)
         h_sch_top.Add(self.chk_master_schematics, 0, wx.ALIGN_CENTER_VERTICAL)
+        self.btn_open_schematic_folder = wx.Button(self.tab_export_schematic, label="Open Output Folder")
+        set_button_icon(self.btn_open_schematic_folder, wx.ART_FOLDER_OPEN)
+        h_sch_top.Add(self.btn_open_schematic_folder, 0, wx.LEFT, 8)
         self.schematic_vbox.Add(h_sch_top, 0, wx.BOTTOM, 5)
 
         self.schematic_list = dv.DataViewListCtrl(
@@ -1360,10 +1688,54 @@ class MainFrame(wx.Frame):
         self.schematic_vbox.Add(wx.StaticText(self.tab_export_schematic, label="Project Schematics:"), 0, wx.BOTTOM, 5)
         self.schematic_vbox.Add(self.schematic_list, 1, wx.EXPAND | wx.BOTTOM, 5)
 
-        self.btn_export_schematics = wx.Button(self.tab_export_schematic, label="Save Schematics as PDF")
+        sch_actions_box = wx.StaticBoxSizer(wx.VERTICAL, self.tab_export_schematic, "Actions")
+        sch_actions_row = wx.BoxSizer(wx.HORIZONTAL)
+        sch_opts = wx.StaticBoxSizer(wx.VERTICAL, self.tab_export_schematic, "Export Options")
+        h_sch_opts = wx.BoxSizer(wx.HORIZONTAL)
+        self.rb_sch_format = wx.RadioBox(
+            self.tab_export_schematic,
+            label="Format",
+            choices=["PDF", "SVG"],
+            majorDimension=2,
+            style=wx.RA_SPECIFY_COLS,
+        )
+        self.rb_sch_mode = wx.RadioBox(
+            self.tab_export_schematic,
+            label="Ausgabe",
+            choices=["Einzelfiles + Kombiniert", "nur Einzelfiles", "nur Kombiniert"],
+            majorDimension=1,
+            style=wx.RA_SPECIFY_ROWS,
+        )
+        self.chk_sch_frame = wx.CheckBox(self.tab_export_schematic, label="Rahmen")
+        self.chk_sch_frame.SetValue(True)
+        self.rb_sch_mode.SetSelection(0)
+        h_sch_opts.Add(self.rb_sch_format, 0, wx.RIGHT, 12)
+        h_sch_opts.Add(self.rb_sch_mode, 0, wx.RIGHT, 12)
+        h_sch_opts.Add(self.chk_sch_frame, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
+        sch_opts.Add(h_sch_opts, 0, wx.ALL, 6)
+        h_sch_actions = wx.BoxSizer(wx.HORIZONTAL)
+        self.btn_export_schematics = wx.Button(self.tab_export_schematic, label="EXPORT SELECTED FILES")
         set_button_icon(self.btn_export_schematics, wx.ART_FILE_SAVE_AS)
-        self.schematic_vbox.Add(self.btn_export_schematics, 0, wx.TOP, 5)
+        self.btn_export_schematics.SetMinSize((-1, 32))
+        _set_bold_labels(self.btn_export_schematics)
+        h_sch_actions.Add(self.btn_export_schematics, 0)
+        sch_actions_row.Add(h_sch_actions, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
+        sch_actions_row.Add(sch_opts, 1, wx.EXPAND)
+        sch_actions_box.Add(sch_actions_row, 0, wx.EXPAND | wx.ALL, 6)
+        _tint_actions_box(sch_actions_box, actions_tint)
+        self.schematic_vbox.Add(sch_actions_box, 0, wx.EXPAND | wx.TOP, 5)
+        self.rb_sch_format.Show(True)
+        self.rb_sch_mode.Show(True)
+        self.chk_sch_frame.Show(True)
+
         self.tab_export_schematic.SetSizer(self.schematic_vbox)
+        self.btn_open_schematic_folder.Show(True)
+        self.btn_export_schematics.Show(True)
+        self.rb_sch_format.Show(True)
+        self.rb_sch_mode.Show(True)
+        self.chk_sch_frame.Show(True)
+        self.tab_export_schematic.Layout()
+        self.tab_export_schematic.Layout()
 
         # --- Export Gerber Layers sub-tab content ---
         self.layer_vbox = wx.BoxSizer(wx.VERTICAL)
@@ -1375,6 +1747,9 @@ class MainFrame(wx.Frame):
         h_layer_top.Add(self.btn_refresh_layers, 0, wx.RIGHT, 8)
         h_layer_top.Add(self.chk_master_layers, 0, wx.ALIGN_CENTER_VERTICAL)
         h_layer_top.Add(self.btn_select_copper_layers, 0, wx.LEFT, 8)
+        self.btn_open_layer_folder = wx.Button(self.tab_export_layers, label="Open Output Folder")
+        set_button_icon(self.btn_open_layer_folder, wx.ART_FOLDER_OPEN)
+        h_layer_top.Add(self.btn_open_layer_folder, 0, wx.LEFT, 8)
         self.layer_vbox.Add(h_layer_top, 0, wx.BOTTOM, 5)
 
         self.layer_list = dv.DataViewListCtrl(
@@ -1388,10 +1763,54 @@ class MainFrame(wx.Frame):
         self.layer_vbox.Add(wx.StaticText(self.tab_export_layers, label="PCB Layers:"), 0, wx.BOTTOM, 5)
         self.layer_vbox.Add(self.layer_list, 1, wx.EXPAND | wx.BOTTOM, 5)
 
-        self.btn_export_layers = wx.Button(self.tab_export_layers, label="Save Layers as Img")
+        layer_actions_box = wx.StaticBoxSizer(wx.VERTICAL, self.tab_export_layers, "Actions")
+        layer_actions_row = wx.BoxSizer(wx.HORIZONTAL)
+        layer_opts = wx.StaticBoxSizer(wx.VERTICAL, self.tab_export_layers, "Export Options")
+        h_layer_opts = wx.BoxSizer(wx.HORIZONTAL)
+        self.rb_layer_format = wx.RadioBox(
+            self.tab_export_layers,
+            label="Format",
+            choices=["SVG", "PDF"],
+            majorDimension=2,
+            style=wx.RA_SPECIFY_COLS,
+        )
+        self.rb_layer_mode = wx.RadioBox(
+            self.tab_export_layers,
+            label="Ausgabe",
+            choices=["Einzelfiles + Kombiniert", "nur Einzelfiles", "nur Kombiniert"],
+            majorDimension=1,
+            style=wx.RA_SPECIFY_ROWS,
+        )
+        self.chk_layer_frame = wx.CheckBox(self.tab_export_layers, label="Rahmen")
+        self.chk_layer_frame.SetValue(True)
+        self.rb_layer_mode.SetSelection(0)
+        h_layer_opts.Add(self.rb_layer_format, 0, wx.RIGHT, 12)
+        h_layer_opts.Add(self.rb_layer_mode, 0, wx.RIGHT, 12)
+        h_layer_opts.Add(self.chk_layer_frame, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
+        layer_opts.Add(h_layer_opts, 0, wx.ALL, 6)
+        h_layer_actions = wx.BoxSizer(wx.HORIZONTAL)
+        self.btn_export_layers = wx.Button(self.tab_export_layers, label="EXPORT SELECTED FILES")
         set_button_icon(self.btn_export_layers, wx.ART_FILE_SAVE_AS)
-        self.layer_vbox.Add(self.btn_export_layers, 0, wx.TOP, 5)
+        self.btn_export_layers.SetMinSize((-1, 32))
+        _set_bold_labels(self.btn_export_layers)
+        h_layer_actions.Add(self.btn_export_layers, 0)
+        layer_actions_row.Add(h_layer_actions, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 12)
+        layer_actions_row.Add(layer_opts, 1, wx.EXPAND)
+        layer_actions_box.Add(layer_actions_row, 0, wx.EXPAND | wx.ALL, 6)
+        _tint_actions_box(layer_actions_box, actions_tint)
+        self.layer_vbox.Add(layer_actions_box, 0, wx.EXPAND | wx.TOP, 5)
+        self.rb_layer_format.Show(True)
+        self.rb_layer_mode.Show(True)
+        self.chk_layer_frame.Show(True)
+
         self.tab_export_layers.SetSizer(self.layer_vbox)
+        self.btn_open_layer_folder.Show(True)
+        self.btn_export_layers.Show(True)
+        self.rb_layer_format.Show(True)
+        self.rb_layer_mode.Show(True)
+        self.chk_layer_frame.Show(True)
+        self.tab_export_layers.Layout()
+        self.tab_export_layers.Layout()
 
         # --- Log output ---
         self.log_panel = wx.Panel(panel)
@@ -1434,6 +1853,7 @@ class MainFrame(wx.Frame):
         show_log = cfg.get(SHOW_LOG_KEY, True)
         self.chk_show_log.SetValue(show_log)
         self._apply_log_visibility(show_log, save_pref=False)
+        self._apply_export_config(cfg)
 
         # --- Bind events ---
         self.Bind(wx.EVT_BUTTON, lambda e: self.open_url("https://github.com/Ihysol"), self.btn_author)
@@ -1466,10 +1886,19 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_BUTTON, self.on_generate_board_images, self.btn_generate_board)
         self.Bind(wx.EVT_BUTTON, self.on_generate_custom_board_images, self.btn_render_custom)
         self.Bind(wx.EVT_BUTTON, self.on_save_board_images, self.btn_save_board)
+        self.Bind(wx.EVT_BUTTON, self.on_open_board_output, self.btn_open_board_folder)
         self.Bind(wx.EVT_BUTTON, self.on_refresh_schematics, self.btn_refresh_schematics)
         self.Bind(wx.EVT_BUTTON, self.on_export_schematics, self.btn_export_schematics)
+        self.Bind(wx.EVT_BUTTON, self.on_open_schematic_output, self.btn_open_schematic_folder)
         self.Bind(wx.EVT_BUTTON, self.on_refresh_layers, self.btn_refresh_layers)
         self.Bind(wx.EVT_BUTTON, self.on_export_layers, self.btn_export_layers)
+        self.Bind(wx.EVT_BUTTON, self.on_open_layer_output, self.btn_open_layer_folder)
+        self.Bind(wx.EVT_RADIOBOX, self.on_schematic_export_options_changed, self.rb_sch_format)
+        self.Bind(wx.EVT_RADIOBOX, self.on_schematic_export_options_changed, self.rb_sch_mode)
+        self.Bind(wx.EVT_CHECKBOX, self.on_schematic_export_options_changed, self.chk_sch_frame)
+        self.Bind(wx.EVT_RADIOBOX, self.on_layer_export_options_changed, self.rb_layer_format)
+        self.Bind(wx.EVT_RADIOBOX, self.on_layer_export_options_changed, self.rb_layer_mode)
+        self.Bind(wx.EVT_CHECKBOX, self.on_layer_export_options_changed, self.chk_layer_frame)
         self.Bind(wx.EVT_RADIOBOX, self.on_preset_changed, self.preset_radio)
         self.Bind(wx.EVT_CHECKBOX, self.on_auto_border_toggled, self.chk_auto_border)
         self.Bind(wx.EVT_BUTTON, self.on_border_margin_dec, self.btn_border_margin_dec)
@@ -1478,6 +1907,51 @@ class MainFrame(wx.Frame):
         self.txt_border_margin.Bind(wx.EVT_KILL_FOCUS, self.on_border_margin_commit)
 
     # ---------- Event handlers ----------
+    def _apply_export_config(self, cfg):
+        sch_fmt = (cfg.get(SCH_EXPORT_FORMAT_KEY, "pdf") or "pdf").lower()
+        sch_mode = (cfg.get(SCH_EXPORT_MODE_KEY, "both") or "both").lower()
+        sch_frame = bool(cfg.get(SCH_EXPORT_FRAME_KEY, True))
+        sch_fmt_map = {"pdf": 0, "svg": 1}
+        self.rb_sch_format.SetSelection(sch_fmt_map.get(sch_fmt, 0))
+        self.rb_sch_mode.SetSelection({"both": 0, "single": 1, "combined": 2}.get(sch_mode, 0))
+        self.chk_sch_frame.SetValue(sch_frame)
+
+        layer_fmt = (cfg.get(LAYER_EXPORT_FORMAT_KEY, "svg") or "svg").lower()
+        layer_mode = (cfg.get(LAYER_EXPORT_MODE_KEY, "both") or "both").lower()
+        layer_frame = bool(cfg.get(LAYER_EXPORT_FRAME_KEY, True))
+        layer_fmt_map = {"svg": 0, "pdf": 1}
+        self.rb_layer_format.SetSelection(layer_fmt_map.get(layer_fmt, 0))
+        self.rb_layer_mode.SetSelection({"both": 0, "single": 1, "combined": 2}.get(layer_mode, 0))
+        self.chk_layer_frame.SetValue(layer_frame)
+
+        self._update_export_option_state()
+
+    def _update_export_option_state(self):
+        pass
+
+    def on_schematic_export_options_changed(self, event):
+        self._update_export_option_state()
+        cfg = load_config()
+        cfg[SCH_EXPORT_FORMAT_KEY] = (self.rb_sch_format.GetStringSelection() or "PDF").lower()
+        cfg[SCH_EXPORT_MODE_KEY] = {0: "both", 1: "single", 2: "combined"}.get(
+            self.rb_sch_mode.GetSelection(), "both"
+        )
+        cfg[SCH_EXPORT_FRAME_KEY] = bool(self.chk_sch_frame.IsChecked())
+        save_config(cfg)
+        if event:
+            event.Skip()
+
+    def on_layer_export_options_changed(self, event):
+        self._update_export_option_state()
+        cfg = load_config()
+        cfg[LAYER_EXPORT_FORMAT_KEY] = (self.rb_layer_format.GetStringSelection() or "SVG").lower()
+        cfg[LAYER_EXPORT_MODE_KEY] = {0: "both", 1: "single", 2: "combined"}.get(
+            self.rb_layer_mode.GetSelection(), "both"
+        )
+        cfg[LAYER_EXPORT_FRAME_KEY] = bool(self.chk_layer_frame.IsChecked())
+        save_config(cfg)
+        if event:
+            event.Skip()
     def on_resize_zip_columns(self, event):
         """Keep ZIP list columns evenly split (33% each) when resized."""
         event.Skip()
@@ -1835,8 +2309,12 @@ class MainFrame(wx.Frame):
         controls = [
             self.btn_refresh_schematics,
             self.btn_export_schematics,
+            self.btn_open_schematic_folder,
             self.chk_master_schematics,
             self.schematic_list,
+            self.rb_sch_format,
+            self.rb_sch_mode,
+            self.chk_sch_frame,
         ]
         for ctrl in controls:
             try:
@@ -1849,8 +2327,12 @@ class MainFrame(wx.Frame):
         controls = [
             self.btn_refresh_layers,
             self.btn_export_layers,
+            self.btn_open_layer_folder,
             self.chk_master_layers,
             self.layer_list,
+            self.rb_layer_format,
+            self.rb_layer_mode,
+            self.chk_layer_frame,
         ]
         for ctrl in controls:
             try:
@@ -1922,15 +2404,37 @@ class MainFrame(wx.Frame):
         if self._schematic_busy:
             return
         self._set_schematic_busy(True)
-        out_dir = KLM_DATA_DIR / "schematic_pdfs"
+        out_dir = KLM_DATA_DIR / "images" / "schematic_images"
         project_dir = str(PROJECT_DIR)
+        fmt = "pdf"
+        mode = "single"
+        include_frame = True
+        try:
+            fmt = (self.rb_sch_format.GetStringSelection() or "PDF").lower()
+            mode_idx = self.rb_sch_mode.GetSelection()
+            mode = {0: "both", 1: "single", 2: "combined"}.get(mode_idx, "single")
+            include_frame = bool(self.chk_sch_frame.IsChecked())
+        except Exception:
+            pass
         self._last_schematic_export = list(selected_schematics)
         self._last_schematic_export_dir = out_dir
-        self.append_log(f"[INFO] Exporting {len(selected_schematics)} schematic PDF(s)...")
+        self._last_schematic_export_format = fmt
+        self._last_schematic_export_mode = mode
+        self._last_schematic_export_frame = include_frame
+        fmt_label = "PDF(s)" if fmt == "pdf" else f"{fmt.upper()} file(s)"
+        self.append_log(f"[INFO] Exporting {len(selected_schematics)} schematic {fmt_label}...")
         self._schematic_export_queue = _make_queue()
         self._schematic_export_process = _start_worker(
             _export_schematics_pdf_worker,
-            ([str(p) for p in selected_schematics], str(out_dir), project_dir, self._schematic_export_queue),
+            (
+                [str(p) for p in selected_schematics],
+                str(out_dir),
+                project_dir,
+                self._schematic_export_queue,
+                fmt,
+                include_frame,
+                mode,
+            ),
         )
         if not self._schematic_export_timer:
             self._schematic_export_timer = wx.Timer(self)
@@ -1963,10 +2467,12 @@ class MainFrame(wx.Frame):
                 ok_count = msg[1] if len(msg) > 1 else 0
                 errors = msg[2] if len(msg) > 2 else []
                 warnings = msg[3] if len(msg) > 3 else []
+                fmt = getattr(self, "_last_schematic_export_format", "pdf")
+                fmt_label = "PDF(s)" if fmt == "pdf" else f"{fmt.upper()} file(s)"
                 if ok_count:
-                    self.append_log(f"[OK] Exported {ok_count} schematic PDF(s).")
+                    self.append_log(f"[OK] Exported {ok_count} schematic {fmt_label}.")
                 else:
-                    self.append_log("[WARN] No schematic PDFs exported.")
+                    self.append_log(f"[WARN] No schematic {fmt_label} exported.")
                 for warn in warnings:
                     self.append_log(f"[WARN] {warn}")
                 for err in errors:
@@ -1975,22 +2481,37 @@ class MainFrame(wx.Frame):
                 payload = msg[1] if len(msg) > 1 else "Unknown error"
                 export_dir = getattr(self, "_last_schematic_export_dir", None)
                 selected = getattr(self, "_last_schematic_export", None)
+                fmt = getattr(self, "_last_schematic_export_format", "pdf")
                 if export_dir and selected:
                     existing = []
                     missing = []
                     for sch in selected:
                         sch_path = Path(sch)
-                        pdf_path = Path(export_dir) / f"{sch_path.stem}.pdf"
-                        if pdf_path.exists():
-                            existing.append(pdf_path)
+                        if fmt == "svg":
+                            matches = list(Path(export_dir).glob(f"{sch_path.stem}*.svg"))
+                            if matches:
+                                existing.extend(matches)
+                            else:
+                                missing.append(f"{sch_path.stem}*.svg")
+                        elif fmt == "png":
+                            matches = list(Path(export_dir).glob(f"{sch_path.stem}*.png"))
+                            if matches:
+                                existing.extend(matches)
+                            else:
+                                missing.append(f"{sch_path.stem}*.png")
                         else:
-                            missing.append(pdf_path.name)
+                            pdf_path = Path(export_dir) / f"{sch_path.stem}.pdf"
+                            if pdf_path.exists():
+                                existing.append(pdf_path)
+                            else:
+                                missing.append(pdf_path.name)
                     if existing:
+                        kind = "PDF" if fmt == "pdf" else fmt.upper()
                         self.append_log(
-                            f"[WARN] Schematic export reported an error, but {len(existing)} PDF(s) exist."
+                            f"[WARN] Schematic export reported an error, but {len(existing)} {kind}(s) exist."
                         )
                         if missing:
-                            self.append_log(f"[WARN] Missing PDFs: {', '.join(missing)}")
+                            self.append_log(f"[WARN] Missing {kind}s: {', '.join(missing)}")
                         self.append_log(f"[WARN] {payload}")
                         return
                 # Fallback: if kicad-cli reports "Exporting PDF ..." but output exists, treat as warn.
@@ -2000,13 +2521,13 @@ class MainFrame(wx.Frame):
                         sch_name = parts[-1].strip() if parts else ""
                         if sch_name.endswith(".kicad_sch"):
                             pdf_name = Path(sch_name).stem + ".pdf"
-                        pdf_path = (export_dir or (KLM_DATA_DIR / "schematic_pdfs")) / pdf_name
-                            if Path(pdf_path).exists():
-                                self.append_log(
-                                    "[WARN] Schematic export reported an error, but output PDF exists."
-                                )
-                                self.append_log(f"[WARN] {payload}")
-                                return
+                        pdf_path = (export_dir or (KLM_DATA_DIR / "images" / "schematic_images")) / pdf_name
+                        if Path(pdf_path).exists():
+                            self.append_log(
+                                "[WARN] Schematic export reported an error, but output PDF exists."
+                            )
+                            self.append_log(f"[WARN] {payload}")
+                            return
                 except Exception:
                     pass
                 self.append_log(f"[ERROR] Schematic export failed: {payload}")
@@ -2021,16 +2542,39 @@ class MainFrame(wx.Frame):
             self.append_log("[ERROR] No .kicad_pcb file found in project.")
             self._set_layer_busy(False)
             return
-        out_dir = KLM_DATA_DIR / "images"
+        out_dir = KLM_DATA_DIR / "images" / "gerber_images"
         project_dir = str(PROJECT_DIR)
+        fmt = "svg"
+        mode = "single"
+        include_frame = True
+        try:
+            fmt = (self.rb_layer_format.GetStringSelection() or "SVG").lower()
+            mode_idx = self.rb_layer_mode.GetSelection()
+            mode = {0: "both", 1: "single", 2: "combined"}.get(mode_idx, "single")
+            include_frame = bool(self.chk_layer_frame.IsChecked())
+        except Exception:
+            pass
         self._last_layer_export = list(selected_layers)
         self._last_layer_export_dir = out_dir
         self._last_layer_export_pcb = pcb
-        self.append_log(f"[INFO] Exporting {len(selected_layers)} layer image(s)...")
+        self._last_layer_export_format = fmt
+        self._last_layer_export_mode = mode
+        self._last_layer_export_frame = include_frame
+        fmt_label = "image(s)" if fmt == "png" else f"{fmt.upper()} file(s)"
+        self.append_log(f"[INFO] Exporting {len(selected_layers)} layer {fmt_label}...")
         self._layer_export_queue = _make_queue()
         self._layer_export_process = _start_worker(
             _export_layers_img_worker,
-            (str(pcb), selected_layers, str(out_dir), project_dir, self._layer_export_queue),
+            (
+                str(pcb),
+                selected_layers,
+                str(out_dir),
+                project_dir,
+                self._layer_export_queue,
+                fmt,
+                include_frame,
+                mode,
+            ),
         )
         if not self._layer_export_timer:
             self._layer_export_timer = wx.Timer(self)
@@ -2063,10 +2607,12 @@ class MainFrame(wx.Frame):
                 ok_count = msg[1] if len(msg) > 1 else 0
                 errors = msg[2] if len(msg) > 2 else []
                 warnings = msg[3] if len(msg) > 3 else []
+                fmt = getattr(self, "_last_layer_export_format", "png")
+                fmt_label = "image(s)" if fmt == "png" else f"{fmt.upper()} file(s)"
                 if ok_count:
-                    self.append_log(f"[OK] Exported {ok_count} layer image(s).")
+                    self.append_log(f"[OK] Exported {ok_count} layer {fmt_label}.")
                 else:
-                    self.append_log("[WARN] No layer images exported.")
+                    self.append_log(f"[WARN] No layer {fmt_label} exported.")
                 for warn in warnings:
                     self.append_log(f"[WARN] {warn}")
                 for err in errors:
@@ -2076,23 +2622,34 @@ class MainFrame(wx.Frame):
                 export_dir = getattr(self, "_last_layer_export_dir", None)
                 selected = getattr(self, "_last_layer_export", None)
                 pcb_path = getattr(self, "_last_layer_export_pcb", None)
+                fmt = getattr(self, "_last_layer_export_format", "png")
+                mode = getattr(self, "_last_layer_export_mode", "single")
                 if export_dir and selected and pcb_path:
                     existing = []
                     missing = []
                     pcb_stem = Path(pcb_path).stem
-                    for layer in selected:
-                        safe_layer = layer.replace("/", "_")
-                        png_path = Path(export_dir) / f"{pcb_stem}_{safe_layer}.png"
-                        if png_path.exists():
-                            existing.append(png_path)
+                    ext = {"png": "png", "svg": "svg", "pdf": "pdf"}.get(fmt, "png")
+                    if mode in ("single", "both"):
+                        for layer in selected:
+                            safe_layer = layer.replace("/", "_")
+                            out_path = Path(export_dir) / f"{pcb_stem}_{safe_layer}.{ext}"
+                            if out_path.exists():
+                                existing.append(out_path)
+                            else:
+                                missing.append(out_path.name)
+                    if mode in ("combined", "both"):
+                        combined_path = Path(export_dir) / f"{pcb_stem}_combined.{ext}"
+                        if combined_path.exists():
+                            existing.append(combined_path)
                         else:
-                            missing.append(png_path.name)
+                            missing.append(combined_path.name)
                     if existing:
+                        kind = "PNG" if fmt == "png" else fmt.upper()
                         self.append_log(
-                            f"[WARN] Layer export reported an error, but {len(existing)} PNG(s) exist."
+                            f"[WARN] Layer export reported an error, but {len(existing)} {kind}(s) exist."
                         )
                         if missing:
-                            self.append_log(f"[WARN] Missing PNGs: {', '.join(missing)}")
+                            self.append_log(f"[WARN] Missing {kind}s: {', '.join(missing)}")
                         self.append_log(f"[WARN] {payload}")
                         return
                 self.append_log(f"[ERROR] Layer export failed: {payload}")
@@ -2286,12 +2843,36 @@ class MainFrame(wx.Frame):
             return
         self._start_export_schematics(selected)
 
+    def on_open_schematic_output(self, event):
+        export_dir = getattr(self, "_last_schematic_export_dir", None) or (KLM_DATA_DIR / "images" / "schematic_images")
+        try:
+            export_dir.mkdir(parents=True, exist_ok=True)
+            open_folder_in_explorer(export_dir)
+        except Exception as e:
+            self.append_log(f"[ERROR] Could not open schematic output folder: {e}")
+
     def on_export_layers(self, event):
         selected = self.collect_selected_layers_for_export()
         if not selected:
             self.append_log("[WARN] No layers selected for export.")
             return
         self._start_export_layers(selected)
+
+    def on_open_layer_output(self, event):
+        export_dir = getattr(self, "_last_layer_export_dir", None) or (KLM_DATA_DIR / "images" / "gerber_images")
+        try:
+            export_dir.mkdir(parents=True, exist_ok=True)
+            open_folder_in_explorer(export_dir)
+        except Exception as e:
+            self.append_log(f"[ERROR] Could not open layer output folder: {e}")
+
+    def on_open_board_output(self, event):
+        export_dir = KLM_DATA_DIR / "images"
+        try:
+            export_dir.mkdir(parents=True, exist_ok=True)
+            open_folder_in_explorer(export_dir)
+        except Exception as e:
+            self.append_log(f"[ERROR] Could not open board image output folder: {e}")
 
     def on_open_output(self, event):
         open_output_folder()
@@ -2668,7 +3249,7 @@ class MainFrame(wx.Frame):
             self.append_log("[ERROR] No generated PNGs available to save.")
             return
 
-        dst_dir = KLM_DATA_DIR / "imgs"
+        dst_dir = KLM_DATA_DIR / "images"
         dst_dir.mkdir(parents=True, exist_ok=True)
         dst_top = dst_dir / "board_preview_top.png"
         dst_bottom = dst_dir / "board_preview_bottom.png"
@@ -3280,13 +3861,13 @@ class MouserAutoOrderTab(wx.Panel):
 
         # Top controls
         top = wx.BoxSizer(wx.HORIZONTAL)
-        self.btn_generate_bom = wx.Button(self, label="Generate Project BOM")
+        self.btn_generate_bom = wx.Button(self, label="GENERATE PROJECT BOM")
         self.btn_generate_bom.SetToolTip(
             "Use kicad-cli to generate a BOM from the current project, then load it here."
         )
-        self.btn_open_bom = wx.Button(self, label="Open BOM CSV...")
+        self.btn_open_bom = wx.Button(self, label="OPEN BOM CSV...")
         self.btn_open_bom.SetToolTip("Open a BOM CSV file to load parts from.")
-        self.btn_submit = wx.Button(self, label="Submit Cart to Mouser")
+        self.btn_submit = wx.Button(self, label="SUBMIT CART TO MOUSER")
         self.btn_submit.SetToolTip(
             "Submit the current selection to Mouser shopping cart via API.\n\n"
             "Make sure that your API key is set in the environment variables and account details contains your address to show EUR currency in Logger."
@@ -3296,14 +3877,11 @@ class MouserAutoOrderTab(wx.Panel):
         set_button_icon(self.btn_generate_bom, wx.ART_REPORT_VIEW)
         set_button_icon(self.btn_open_bom, wx.ART_FOLDER_OPEN)
         set_button_icon(self.btn_submit, wx.ART_GO_DIR_UP)
+        self.btn_generate_bom.SetMinSize((-1, 32))
+        self.btn_open_bom.SetMinSize((-1, 32))
+        self.btn_submit.SetMinSize((-1, 32))
+        _set_bold_labels(self.btn_generate_bom, self.btn_open_bom, self.btn_submit)
 
-        top.Add(self.btn_generate_bom, 1, wx.EXPAND | wx.RIGHT, 6)
-        top.Add(self.btn_open_bom, 1, wx.EXPAND | wx.RIGHT, 6)
-        sep = wx.StaticLine(self, style=wx.LI_VERTICAL)
-        top.Add(sep, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 6)
-        top.Add(self.btn_submit, 1, wx.EXPAND | wx.RIGHT, 6)
-        sep2 = wx.StaticLine(self, style=wx.LI_VERTICAL)
-        top.Add(sep2, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 6)
         lbl_mnr_column = wx.StaticText(self, label="Mouser # column:")
         lbl_mnr_column.SetToolTip("Select which column in the BOM contains the Mouser Part Numbers.")
         top.Add(lbl_mnr_column, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
@@ -3363,6 +3941,15 @@ class MouserAutoOrderTab(wx.Panel):
         self.dv.SetDropTarget(BOMFileDropTarget(self))
         self.SetDropTarget(BOMFileDropTarget(self))
         s.Add(self.dv, 1, wx.EXPAND | wx.ALL, 0)
+
+        actions_box = wx.StaticBoxSizer(wx.VERTICAL, self, "Actions")
+        actions_row = wx.BoxSizer(wx.HORIZONTAL)
+        actions_row.Add(self.btn_generate_bom, 0, wx.RIGHT, 8)
+        actions_row.Add(self.btn_open_bom, 0, wx.RIGHT, 8)
+        actions_row.Add(self.btn_submit, 0)
+        actions_box.Add(actions_row, 0, wx.ALL, 6)
+        _tint_actions_box(actions_box, wx.Colour(238, 250, 246))
+        s.Add(actions_box, 0, wx.EXPAND | wx.TOP, 6)
 
         self.SetSizer(s)
 

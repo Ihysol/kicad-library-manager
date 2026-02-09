@@ -1,7 +1,18 @@
 $ErrorActionPreference = "Stop"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
-$version = "1.2.0"
+$guiCore = Join-Path $repoRoot "library_manager\\src\\gui_core.py"
+$version = $null
+if (Test-Path $guiCore) {
+    $text = Get-Content -Raw -Path $guiCore
+    $match = [regex]::Match($text, 'APP_VERSION\s*=\s*\"v?([0-9\.]+)\"')
+    if ($match.Success) {
+        $version = $match.Groups[1].Value
+    }
+}
+if (-not $version) {
+    throw "APP_VERSION not found in $guiCore"
+}
 $packageName = "kicad-library-manager-$version"
 $distDir = Join-Path $repoRoot "dist"
 $stageDir = Join-Path $distDir $packageName

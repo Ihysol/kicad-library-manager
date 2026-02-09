@@ -1,4 +1,4 @@
-{
+﻿{
   "$schema": "https://go.kicad.org/pcm/schemas/v1",
   "name": "KiCad Library Manager",
   "identifier": "com.github.ihysol.kicad-library-manager",
@@ -24,13 +24,48 @@
   },
   "versions": [
     {
-      "version": "1.2.0",
+      "version": "1.3",
       "status": "stable",
       "kicad_version": "9.0",
-      "download_url": "https://github.com/Ihysol/kicad-library-manager/releases/download/1.2.0/kicad-library-manager-1.2.0.zip",
-      "download_sha256": "5329c3829633d0595b3ffae589220f581a894c9b974b54ec36ff0659ef05e04a",
-      "download_size": 68732,
-      "install_size": 277774
+      "download_url": "https://github.com/Ihysol/kicad-library-manager/releases/download/1.3/kicad-library-manager-1.3.zip",
+      "download_sha256": "7128593c6d70c6bf415ca1f6f6b467848b41c292ba45ccac6da896699b6914b6",
+      "download_size": 76945,
+      "install_size": 334034
     }
   ]
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
