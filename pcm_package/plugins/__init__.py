@@ -60,18 +60,28 @@ class KiCadLibraryManager(pcbnew.ActionPlugin):
 
 def _find_icon_path():
     here = Path(__file__).resolve()
-    # Package layout: <root>/plugins/kicad_library_manager/__init__.py
-    pkg_icon = here.parents[2] / "resources" / "icon.png"
-    if pkg_icon.exists():
-        return pkg_icon
+    # Support both layouts:
+    # 1) <root>/plugins/__init__.py
+    # 2) <root>/plugins/<pkg>/__init__.py
+    local_candidates = (
+        here.parents[1] / "resources" / "icon.png",
+        here.parents[2] / "resources" / "icon.png",
+    )
+    for candidate in local_candidates:
+        if candidate.exists():
+            return candidate
 
-    # Installed PCM layout: <user>/.../3rdparty/plugins/<id>/kicad_library_manager
+    # Installed PCM layouts under KiCad user directory.
     identifier = "com_github_ihysol_kicad-library-manager"
     for parent in here.parents:
         if parent.name.lower() == "3rdparty":
-            installed_icon = parent / "resources" / identifier / "icon.png"
-            if installed_icon.exists():
-                return installed_icon
+            installed_candidates = (
+                parent / "resources" / identifier / "icon.png",
+                parent / "plugins" / "resources" / identifier / "icon.png",
+            )
+            for candidate in installed_candidates:
+                if candidate.exists():
+                    return candidate
             break
 
     return None
