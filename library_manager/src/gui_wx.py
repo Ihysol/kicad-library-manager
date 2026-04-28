@@ -100,13 +100,8 @@ def _set_bold_labels(*controls: wx.Control) -> None:
 
 
 def _tint_actions_box(box_sizer: wx.StaticBoxSizer, color: wx.Colour) -> None:
-    """Apply a subtle background tint to an Actions section."""
-    try:
-        box = box_sizer.GetStaticBox()
-        if box:
-            box.SetBackgroundColour(color)
-    except Exception:
-        pass
+    """Keep native/default UI colors (no explicit override)."""
+    return
 
 # --- Formatter with auto-clean for duplicate prefixes ---
 class CleanFormatter(logging.Formatter):
