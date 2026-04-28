@@ -69,7 +69,7 @@ except ImportError:
 # Logging
 # =========================
 logger = logging.getLogger("kicad_library_manager")
-APP_VERSION = "v1.01"
+APP_VERSION = "v1.02"
 
 
 def ensure_logger(handler: logging.Handler | None = None, level: int = logging.INFO) -> None:
@@ -390,37 +390,9 @@ def update_drc_rules() -> bool:
     """
     try:
         cwd = Path.cwd()
-        pcb = None
-        for parent in [cwd] + list(cwd.parents):
-            hits = list(parent.glob("*.kicad_pcb"))
-            if hits:
-                pcb = hits[0]
-                break
-        if not pcb:
-            logger.error("[ERROR] No .kicad_pcb file found.")
+        layer_count = detect_drc_layer_count()
+        if layer_count is None:
             return False
-        logger.info(f"Found PCB file: {pcb.name}")
-
-        with pcb.open("r", encoding="utf-8") as f:
-            sexpr = loads(f.read())
-
-        layers_block = None
-        for e in sexpr:
-            if isinstance(e, list) and e and e[0] == Symbol("layers"):
-                layers_block = e
-                break
-        if not layers_block:
-            logger.error("[ERROR] No (layers ...) block found in PCB file.")
-            return False
-
-        copper_layers = [
-            layer
-            for layer in layers_block[1:]
-            if isinstance(layer, list)
-            and len(layer) > 1
-            and str(layer[1]).endswith(".Cu")
-        ]
-        layer_count = len(copper_layers)
         logger.info(f"Detected {layer_count} copper layers.")
 
         dru_template_dir = None
@@ -462,6 +434,46 @@ def update_drc_rules() -> bool:
     except Exception as e:
         logger.error(f"[FAIL] DRC update failed: {e}")
         return False
+
+
+def detect_drc_layer_count() -> int | None:
+    """Detect copper layer count from the nearest project PCB file."""
+    try:
+        cwd = Path.cwd()
+        pcb = None
+        for parent in [cwd] + list(cwd.parents):
+            hits = list(parent.glob("*.kicad_pcb"))
+            if hits:
+                pcb = hits[0]
+                break
+        if not pcb:
+            logger.error("[ERROR] No .kicad_pcb file found.")
+            return None
+        logger.info(f"Found PCB file: {pcb.name}")
+
+        with pcb.open("r", encoding="utf-8") as f:
+            sexpr = loads(f.read())
+
+        layers_block = None
+        for e in sexpr:
+            if isinstance(e, list) and e and e[0] == Symbol("layers"):
+                layers_block = e
+                break
+        if not layers_block:
+            logger.error("[ERROR] No (layers ...) block found in PCB file.")
+            return None
+
+        copper_layers = [
+            layer
+            for layer in layers_block[1:]
+            if isinstance(layer, list)
+            and len(layer) > 1
+            and str(layer[1]).endswith(".Cu")
+        ]
+        return len(copper_layers)
+    except Exception as e:
+        logger.error(f"[ERROR] Failed to detect copper layer count: {e}")
+        return None
 
 
 # =========================

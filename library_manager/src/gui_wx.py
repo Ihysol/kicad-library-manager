@@ -379,10 +379,11 @@ def _delete_symbols_worker(selected_symbols, queue) -> None:
 
 
 def _update_drc_worker(queue) -> None:
-    from gui_core import update_drc_rules
+    from gui_core import detect_drc_layer_count, update_drc_rules
     try:
+        layers = detect_drc_layer_count()
         ok = update_drc_rules()
-        queue.put(("ok", ok))
+        queue.put(("ok", ok, layers))
     except Exception as e:
         queue.put(("error", str(e)))
 
@@ -1242,6 +1243,7 @@ class MainFrame(wx.Frame):
         self._sym_delete_timer = None
         self._drc_busy = False
         self._drc_timer = None
+        self._drc_feedback_timer = None
         self._schematic_busy = False
         self._schematic_export_timer = None
         self._layer_busy = False
@@ -1341,7 +1343,7 @@ class MainFrame(wx.Frame):
         self.notebook.AddPage(self.tab_zip, "Import ZIP Archives")
         self.notebook.AddPage(self.tab_symbol, "Export Project Symbols")
         self.notebook.AddPage(self.tab_drc, "DRC Manager")
-        self.notebook.AddPage(self.tab_board, "Generate Images from PCB")
+        self.notebook.AddPage(self.tab_board, "PCB Exports")
         self.notebook.AddPage(self.tab_mouser, "Mouser Auto Order")
         vbox.Add(self.notebook, 1, wx.EXPAND | wx.ALL, 8)
 
@@ -1449,16 +1451,12 @@ class MainFrame(wx.Frame):
         # --- Export + Orphan Delete Buttons ---
         self.btn_export = wx.Button(self.tab_symbol, label="EXPORT SELECTED")
         self.btn_open_output = wx.Button(self.tab_symbol, label="OPEN OUTPUT FOLDER")
-        self.btn_delete_orphans = wx.Button(self.tab_symbol, label="DELETE SELECTED")
         set_button_icon(self.btn_export, wx.ART_FILE_SAVE_AS)
         set_button_icon(self.btn_open_output, wx.ART_FOLDER_OPEN)
-        set_button_icon(self.btn_delete_orphans, wx.ART_DELETE)
         self.btn_export.SetMinSize((-1, 32))
         self.btn_open_output.SetMinSize((-1, 32))
-        self.btn_delete_orphans.SetMinSize((-1, 32))
-        _set_bold_labels(self.btn_export, self.btn_open_output, self.btn_delete_orphans)
+        _set_bold_labels(self.btn_export, self.btn_open_output)
         self.tab_symbol.Layout()
-        self.btn_delete_orphans.SetForegroundColour(wx.RED)
 
         h_sym_btns = wx.BoxSizer(wx.HORIZONTAL)
         self.btn_delete_selected = wx.Button(self.tab_symbol, label="DELETE SELECTED")
@@ -1480,14 +1478,24 @@ class MainFrame(wx.Frame):
         # --- DRC tab content ---
         self.drc_vbox = wx.BoxSizer(wx.VERTICAL)
         self.btn_drc = wx.Button(self.tab_drc, label="UPDATE DRC RULES")
-        set_button_icon(self.btn_drc, wx.ART_TICK_MARK)
         self.btn_drc.SetMinSize((-1, 32))
         _set_bold_labels(self.btn_drc)
         self.drc_vbox.Add(wx.StaticText(self.tab_drc, label="Auto-Apply DRC Rules Based on PCB Layer Count:"), 0, wx.BOTTOM, 5)
         drc_actions_box = wx.StaticBoxSizer(wx.VERTICAL, self.tab_drc, "Actions")
+        drc_auto_box = wx.StaticBoxSizer(wx.VERTICAL, self.tab_drc, "DRC Rules")
         h_drc_actions = wx.BoxSizer(wx.HORIZONTAL)
-        h_drc_actions.Add(self.btn_drc, 0)
-        drc_actions_box.Add(h_drc_actions, 0, wx.ALL, 6)
+        h_drc_actions.Add(self.btn_drc, 0, wx.RIGHT, 8)
+        self.lbl_drc_feedback = wx.StaticText(self.tab_drc, label="")
+        self.lbl_drc_feedback.SetMinSize((24, -1))
+        feedback_font = self.lbl_drc_feedback.GetFont()
+        self.lbl_drc_feedback.SetFont(feedback_font.Bold())
+        h_drc_actions.Add(self.lbl_drc_feedback, 0, wx.ALIGN_CENTER_VERTICAL)
+        self.lbl_drc_layer_info = wx.StaticText(self.tab_drc, label="")
+        self.lbl_drc_layer_info.SetForegroundColour(wx.Colour(0, 150, 0))
+        self.lbl_drc_layer_info.SetMinSize((220, -1))
+        drc_auto_box.Add(h_drc_actions, 0, wx.ALL, 6)
+        drc_auto_box.Add(self.lbl_drc_layer_info, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 6)
+        drc_actions_box.Add(drc_auto_box, 0, wx.EXPAND | wx.ALL, 6)
         _tint_actions_box(drc_actions_box, actions_tint)
         self.drc_vbox.Add(drc_actions_box, 0, wx.EXPAND | wx.BOTTOM, 5)
         self.tab_drc.SetSizer(self.drc_vbox)
@@ -1696,12 +1704,12 @@ class MainFrame(wx.Frame):
         )
         self.rb_sch_mode = wx.RadioBox(
             self.tab_export_schematic,
-            label="Ausgabe",
-            choices=["Einzelfiles + Kombiniert", "nur Einzelfiles", "nur Kombiniert"],
+            label="Output",
+            choices=["Single Files + Combined", "Single Files Only", "Combined Only"],
             majorDimension=1,
             style=wx.RA_SPECIFY_ROWS,
         )
-        self.chk_sch_frame = wx.CheckBox(self.tab_export_schematic, label="Rahmen")
+        self.chk_sch_frame = wx.CheckBox(self.tab_export_schematic, label="Frame")
         self.chk_sch_frame.SetValue(True)
         self.rb_sch_mode.SetSelection(0)
         h_sch_opts.Add(self.rb_sch_format, 0, wx.RIGHT, 12)
@@ -1765,18 +1773,18 @@ class MainFrame(wx.Frame):
         self.rb_layer_format = wx.RadioBox(
             self.tab_export_layers,
             label="Format",
-            choices=["SVG", "PDF"],
+            choices=["PDF", "SVG"],
             majorDimension=2,
             style=wx.RA_SPECIFY_COLS,
         )
         self.rb_layer_mode = wx.RadioBox(
             self.tab_export_layers,
-            label="Ausgabe",
-            choices=["Einzelfiles + Kombiniert", "nur Einzelfiles", "nur Kombiniert"],
+            label="Output",
+            choices=["Single Files + Combined", "Single Files Only", "Combined Only"],
             majorDimension=1,
             style=wx.RA_SPECIFY_ROWS,
         )
-        self.chk_layer_frame = wx.CheckBox(self.tab_export_layers, label="Rahmen")
+        self.chk_layer_frame = wx.CheckBox(self.tab_export_layers, label="Frame")
         self.chk_layer_frame.SetValue(True)
         self.rb_layer_mode.SetSelection(0)
         h_layer_opts.Add(self.rb_layer_format, 0, wx.RIGHT, 12)
@@ -1914,8 +1922,8 @@ class MainFrame(wx.Frame):
         layer_fmt = (cfg.get(LAYER_EXPORT_FORMAT_KEY, "svg") or "svg").lower()
         layer_mode = (cfg.get(LAYER_EXPORT_MODE_KEY, "both") or "both").lower()
         layer_frame = bool(cfg.get(LAYER_EXPORT_FRAME_KEY, True))
-        layer_fmt_map = {"svg": 0, "pdf": 1}
-        self.rb_layer_format.SetSelection(layer_fmt_map.get(layer_fmt, 0))
+        layer_fmt_map = {"pdf": 0, "svg": 1}
+        self.rb_layer_format.SetSelection(layer_fmt_map.get(layer_fmt, 1))
         self.rb_layer_mode.SetSelection({"both": 0, "single": 1, "combined": 2}.get(layer_mode, 0))
         self.chk_layer_frame.SetValue(layer_frame)
 
@@ -2687,10 +2695,38 @@ class MainFrame(wx.Frame):
             self.btn_drc.Enable(not busy)
         except Exception:
             pass
+        if busy:
+            self._set_drc_feedback("", wx.Colour(120, 120, 120))
+            self._set_drc_layer_info("")
+
+    def _set_drc_feedback(self, text: str, color: wx.Colour):
+        try:
+            self.lbl_drc_feedback.SetLabel(text)
+            self.lbl_drc_feedback.SetForegroundColour(color)
+            self.lbl_drc_feedback.Refresh()
+        except Exception:
+            pass
+
+    def _set_drc_layer_info(self, text: str):
+        try:
+            self.lbl_drc_layer_info.SetLabel(text)
+            self.lbl_drc_layer_info.Refresh()
+        except Exception:
+            pass
+
+    def _schedule_drc_feedback_clear(self, delay_ms: int = 3500):
+        if not self._drc_feedback_timer:
+            self._drc_feedback_timer = wx.Timer(self)
+            self.Bind(wx.EVT_TIMER, self._on_drc_feedback_timeout, self._drc_feedback_timer)
+        self._drc_feedback_timer.Start(delay_ms, oneShot=True)
+
+    def _on_drc_feedback_timeout(self, event):
+        self._set_drc_feedback("", wx.Colour(120, 120, 120))
 
     def _start_drc_update(self):
         if self._drc_busy:
             return
+        self._set_drc_feedback("", wx.Colour(120, 120, 120))
         self._set_drc_busy(True)
         self._drc_queue = _make_queue()
         self._drc_process = _start_worker(_update_drc_worker, (self._drc_queue,))
@@ -2701,18 +2737,35 @@ class MainFrame(wx.Frame):
 
     def _on_drc_poll(self, event):
         try:
-            status, payload = self._drc_queue.get_nowait()
+            msg = self._drc_queue.get_nowait()
         except Exception:
             return
+        status = msg[0] if isinstance(msg, tuple) and msg else "error"
+        payload = msg[1] if isinstance(msg, tuple) and len(msg) > 1 else None
+        layers = msg[2] if isinstance(msg, tuple) and len(msg) > 2 else None
         self._drc_timer.Stop()
         if self._drc_process and self._drc_process.is_alive():
             self._drc_process.join(timeout=0)
         self._set_drc_busy(False)
         if status == "ok" and payload:
-            self.append_log("[OK] DRC updated successfully.")
+            self._set_drc_feedback("✓", wx.Colour(0, 150, 0))
+            if layers in (2, 4):
+                self._set_drc_layer_info(f"Applied {layers}-layer DRC template")
+                self.append_log(f"[OK] DRC updated successfully ({layers}-layer template).")
+            elif isinstance(layers, int):
+                self._set_drc_layer_info(f"Applied {layers}-layer DRC template")
+                self.append_log(f"[OK] DRC updated successfully ({layers}-layer template).")
+            else:
+                self._set_drc_layer_info("DRC template applied")
+                self.append_log("[OK] DRC updated successfully.")
+            self._schedule_drc_feedback_clear()
         elif status == "ok":
+            self._set_drc_feedback("✗", wx.Colour(200, 0, 0))
+            self._set_drc_layer_info("")
             self.append_log("[FAIL] DRC update failed. See log for details.")
         else:
+            self._set_drc_feedback("✗", wx.Colour(200, 0, 0))
+            self._set_drc_layer_info("")
             self.append_log(f"[ERROR] DRC update failed: {payload}")
 
     def refresh_zip_list_async(self):
@@ -2874,6 +2927,7 @@ class MainFrame(wx.Frame):
 
     def on_drc_update(self, event):
         self._start_drc_update()
+
 
     def on_tab_changed(self, event):
         """Automatically refresh the correct list when switching tabs."""

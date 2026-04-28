@@ -24,16 +24,17 @@
   },
   "versions": [
     {
-      "version": "1.01",
+      "version": "1.02",
       "status": "stable",
       "kicad_version": "9.0",
-      "download_url": "https://github.com/Ihysol/kicad-library-manager/releases/download/V1.01/kicad-library-manager-1.01.zip",
-      "download_sha256": "7b7c0cfb566ca4ff3f1fff7d8a0aa37fd9ab979df331a938c4555902e4bdfdca",
-      "download_size": 78980,
+      "download_url": "https://github.com/Ihysol/kicad-library-manager/releases/download/V1.02/kicad-library-manager-1.02.zip",
+      "download_sha256": "0433232EE6D51BEDF27E9BDB82978400A2CAA113D5E1A1495B5D7C74791D5097",
+      "download_size": 81196,
       "install_size": 336352
     }
   ]
 }
+
 
 
 
