@@ -1,4 +1,4 @@
-"""
+﻿"""
 Backend helpers for the KiCad Library Manager.
 This module is UI-agnostic and exposes utilities for:
 - config persistence
@@ -69,7 +69,7 @@ except ImportError:
 # Logging
 # =========================
 logger = logging.getLogger("kicad_library_manager")
-APP_VERSION = "v1.3"
+APP_VERSION = "v1.0"
 
 
 def ensure_logger(handler: logging.Handler | None = None, level: int = logging.INFO) -> None:
@@ -489,3 +489,4 @@ def open_output_folder() -> None:
     output_folder = INPUT_ZIP_FOLDER.parent / "library_output"
     output_folder.mkdir(parents=True, exist_ok=True)
     open_folder_in_explorer(output_folder)
+
