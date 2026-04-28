@@ -30,7 +30,7 @@
           "status": "stable",
           "kicad_version": "9.0",
           "download_url": "https://github.com/Ihysol/kicad-library-manager/releases/download/V1.02/kicad-library-manager-1.02.zip",
-          "download_sha256": "0433232EE6D51BEDF27E9BDB82978400A2CAA113D5E1A1495B5D7C74791D5097",
+          "download_sha256": "0433232ee6d51bedf27e9bdb82978400a2caa113d5e1a1495b5d7c74791d5097",
           "download_size": 81196,
           "install_size": 336352
         }
@@ -38,6 +38,7 @@
     }
   ]
 }
+
 
 
 
