@@ -208,6 +208,238 @@ def find_sexp_property(sexp_list, prop_name: str):
     return None
 
 
+def canonical_part_name(name: str) -> str:
+    """Normalize symbol/asset base names for robust matching."""
+    out = SUB_PART_PATTERN.sub("", str(name))
+    if out.startswith("LIB_"):
+        out = out[4:]
+    return out
+
+
+def _project_uri_for(path: Path) -> str:
+    """Return a KiCad ${KIPRJMOD}-based URI for an absolute path."""
+    rel = Path(os.path.relpath(path, PROJECT_DIR)).as_posix()
+    return "${KIPRJMOD}" if rel in (".", "") else f"${{KIPRJMOD}}/{rel}"
+
+
+def _ensure_library_table_entry(
+    table_path: Path,
+    root_tag: str,
+    lib_name: str,
+    uri: str,
+    lib_type: str = "KiCad",
+) -> None:
+    """
+    Ensure/update a single library entry in KiCad table files:
+      - fp-lib-table  root tag: fp_lib_table
+      - sym-lib-table root tag: sym_lib_table
+    """
+    root_sym = Symbol(root_tag)
+    lib_sym = Symbol("lib")
+
+    if table_path.exists():
+        try:
+            with open(table_path, "r", encoding="utf-8") as f:
+                table = loads(f.read())
+        except Exception as e:
+            logger.warning(f"Could not parse {table_path.name}, recreating: {e}")
+            table = [root_sym, [Symbol("version"), 7]]
+    else:
+        table = [root_sym, [Symbol("version"), 7]]
+
+    # Repair older wrapped form: ((fp_lib_table ...)) / ((sym_lib_table ...))
+    if (
+        isinstance(table, list)
+        and len(table) == 1
+        and isinstance(table[0], list)
+        and table[0]
+    ):
+        table = table[0]
+
+    if not isinstance(table, list) or not table:
+        table = [root_sym, [Symbol("version"), 7]]
+    elif str(table[0]) != root_tag:
+        table = [root_sym, [Symbol("version"), 7]]
+
+    new_entry = [
+        lib_sym,
+        [Symbol("name"), lib_name],
+        [Symbol("type"), lib_type],
+        [Symbol("uri"), uri],
+        [Symbol("options"), ""],
+        [Symbol("descr"), ""],
+    ]
+
+    replaced = False
+    for idx, el in enumerate(table):
+        if not (isinstance(el, list) and el and str(el[0]) == "lib"):
+            continue
+        name_node = find_sexp_element(el[1:], "name")
+        if name_node and len(name_node) > 1 and str(name_node[1]) == lib_name:
+            table[idx] = new_entry
+            replaced = True
+            break
+
+    if not replaced:
+        table.append(new_entry)
+
+    # Write a strict KiCad-compatible table text (avoid serializer quirks).
+    lines = [f"({root_tag}", "  (version 7)"]
+    for el in table:
+        if not (isinstance(el, list) and el and str(el[0]) == "lib"):
+            continue
+        name_node = find_sexp_element(el[1:], "name")
+        type_node = find_sexp_element(el[1:], "type")
+        uri_node = find_sexp_element(el[1:], "uri")
+        opts_node = find_sexp_element(el[1:], "options")
+        descr_node = find_sexp_element(el[1:], "descr")
+        name_val = str(name_node[1]) if name_node and len(name_node) > 1 else ""
+        type_val = str(type_node[1]) if type_node and len(type_node) > 1 else lib_type
+        uri_val = str(uri_node[1]) if uri_node and len(uri_node) > 1 else ""
+        opts_val = str(opts_node[1]) if opts_node and len(opts_node) > 1 else ""
+        descr_val = str(descr_node[1]) if descr_node and len(descr_node) > 1 else ""
+        lines.append(
+            f'  (lib (name "{name_val}") (type "{type_val}") (uri "{uri_val}") (options "{opts_val}") (descr "{descr_val}"))'
+        )
+    lines.append(")")
+
+    with open(table_path, "w", encoding="utf-8", newline="\n") as f:
+        f.write("\n".join(lines) + "\n")
+
+
+def ensure_project_library_tables() -> None:
+    """Make sure KiCad project lib tables point to current symbol/footprint locations."""
+    try:
+        fp_table = PROJECT_DIR / "fp-lib-table"
+        sym_table = PROJECT_DIR / "sym-lib-table"
+
+        fp_uri = _project_uri_for(PROJECT_FOOTPRINT_LIB)
+        sym_uri = _project_uri_for(PROJECT_SYMBOL_LIB)
+
+        _ensure_library_table_entry(
+            table_path=fp_table,
+            root_tag="fp_lib_table",
+            lib_name=PROJECT_FOOTPRINT_LIB_NAME,
+            uri=fp_uri,
+            lib_type="KiCad",
+        )
+        _ensure_library_table_entry(
+            table_path=sym_table,
+            root_tag="sym_lib_table",
+            lib_name="ProjectSymbols",
+            uri=sym_uri,
+            lib_type="KiCad",
+        )
+        logger.info(
+            f"Updated KiCad lib tables: {fp_table.name}, {sym_table.name}"
+        )
+    except Exception as e:
+        logger.warning(f"Failed to update KiCad lib tables: {e}")
+
+
+def normalize_project_symbol_footprint_links() -> None:
+    """
+    Keep legacy behavior: all symbol footprint links use the active project
+    footprint library nickname, independent of where files are stored.
+    """
+    if not PROJECT_SYMBOL_LIB.exists():
+        return
+
+    try:
+        with open(PROJECT_SYMBOL_LIB, "r", encoding="utf-8") as f:
+            sym_tree = loads(f.read())
+    except Exception as e:
+        logger.warning(f"Could not parse {PROJECT_SYMBOL_LIB.name}: {e}")
+        return
+
+    changed = False
+    for element in sym_tree[1:]:
+        if not (
+            isinstance(element, list)
+            and len(element) > 1
+            and str(element[0]) == "symbol"
+        ):
+            continue
+
+        prop = find_sexp_property(element, "Footprint")
+        if prop and len(prop) > 2:
+            raw_val = str(prop[2])
+            fp_name = raw_val.split(":")[-1]
+            new_val = f"{PROJECT_FOOTPRINT_LIB_NAME}:{fp_name}"
+            if raw_val != new_val:
+                prop[2] = new_val
+                changed = True
+
+        fp_elem = find_sexp_element(element, "footprint")
+        if fp_elem and len(fp_elem) > 1:
+            raw_val = str(fp_elem[1])
+            fp_name = raw_val.split(":")[-1]
+            new_val = f"{PROJECT_FOOTPRINT_LIB_NAME}:{fp_name}"
+            if raw_val != new_val:
+                fp_elem[1] = new_val
+                changed = True
+
+    if changed:
+        with open(PROJECT_SYMBOL_LIB, "w", encoding="utf-8") as f:
+            f.write(dumps(sym_tree, pretty_print=True))
+        logger.info("Normalized symbol footprint links to current project footprint library.")
+
+
+def relink_symbols_to_existing_footprints() -> None:
+    """
+    Ensure symbol Footprint links point to footprints that actually exist in the
+    current footprint library directory.
+    """
+    if not PROJECT_SYMBOL_LIB.exists() or not PROJECT_FOOTPRINT_LIB.exists():
+        return
+
+    available = {p.stem for p in PROJECT_FOOTPRINT_LIB.glob("*.kicad_mod")}
+    if not available:
+        return
+
+    try:
+        with open(PROJECT_SYMBOL_LIB, "r", encoding="utf-8") as f:
+            sym_tree = loads(f.read())
+    except Exception as e:
+        logger.warning(f"Could not parse {PROJECT_SYMBOL_LIB.name}: {e}")
+        return
+
+    changed = False
+    for element in sym_tree[1:]:
+        if not (
+            isinstance(element, list)
+            and len(element) > 1
+            and str(element[0]) == "symbol"
+        ):
+            continue
+
+        symbol_name = str(element[1])
+        base_name = SUB_PART_PATTERN.sub("", symbol_name)
+
+        prop = find_sexp_property(element, "Footprint")
+        if not (prop and len(prop) > 2):
+            continue
+
+        raw_val = str(prop[2])
+        current_fp = raw_val.split(":")[-1]
+        if current_fp in available:
+            wanted = f"{PROJECT_FOOTPRINT_LIB_NAME}:{current_fp}"
+            if raw_val != wanted:
+                prop[2] = wanted
+                changed = True
+            continue
+
+        # Fallback to base symbol name if that footprint exists.
+        if base_name in available:
+            prop[2] = f"{PROJECT_FOOTPRINT_LIB_NAME}:{base_name}"
+            changed = True
+
+    if changed:
+        with open(PROJECT_SYMBOL_LIB, "w", encoding="utf-8") as f:
+            f.write(dumps(sym_tree, pretty_print=True))
+        logger.info("Relinked symbol footprint fields to existing .kicad_mod files.")
+
+
 # ---------------------------------------------------------------------------------
 # Symbol conversion (8 <-> 9) helpers
 # ---------------------------------------------------------------------------------
@@ -683,7 +915,7 @@ def append_symbols_from_file(src_sym_file: Path, rename_assets=False):
             and (element[0] == "symbol" or element[0] == Symbol("symbol"))
         ):
             symbol_name = str(element[1])
-            base_name = SUB_PART_PATTERN.sub("", symbol_name)
+            base_name = canonical_part_name(symbol_name)
 
             if base_name not in existing_main_symbols:
                 # Fix footprint linkage
@@ -917,7 +1149,9 @@ def localize_3d_model_path(
 ) -> str:
     """
     Rewrites (model "...") paths in `mod_text` (or on-disk file) to:
-        ${KIPRJMOD}/3dmodels/<SymbolName>.stp
+        ${KIPRJMOD}/<relative path from project to 3D model dir>/<SymbolName>.stp
+    Example with KLM_DATA_DIR=../data:
+        ${KIPRJMOD}/../data/3dmodels/<SymbolName>.stp
     Uses footprint_map[footprint_name] to figure out SymbolName.
     Returns new text.
     """
@@ -934,9 +1168,10 @@ def localize_3d_model_path(
         return mod_text
 
     modified = False
+    rel_3d_dir = Path(os.path.relpath(PROJECT_3D_DIR, PROJECT_DIR)).as_posix()
     for idx, elem in enumerate(mod_sexp):
         if isinstance(elem, list) and elem and str(elem[0]) == "model":
-            new_path = f"${{KIPRJMOD}}/3dmodels/{symbol_name}.stp"
+            new_path = f"${{KIPRJMOD}}/{rel_3d_dir}/{symbol_name}.stp"
             if len(elem) > 1:
                 mod_sexp[idx][1] = new_path
                 modified = True
@@ -1352,6 +1587,7 @@ def process_zip(zip_file, rename_assets: bool = False, use_symbol_name: bool = F
         logger.warning("No new 3D models found or copied.")
 
     # cleanup temp + temp map
+    relink_symbols_to_existing_footprints()
     shutil.rmtree(tempdir)
     if TEMP_MAP_FILE.exists():
         TEMP_MAP_FILE.unlink()
@@ -1407,7 +1643,7 @@ def purge_zip_contents(zip_path: Path):
                         and (element[0] == "symbol" or element[0] == Symbol("symbol"))
                     ):
                         sym_name = str(element[1])
-                        base_name = SUB_PART_PATTERN.sub("", sym_name)
+                        base_name = canonical_part_name(sym_name)
                         symbols_to_delete.add(base_name)
 
             except Exception as e:
@@ -1439,7 +1675,7 @@ def purge_zip_contents(zip_path: Path):
                     and (element[0] == "symbol" or element[0] == Symbol("symbol"))
                 ):
                     symbol_name = str(element[1])
-                    base_name = SUB_PART_PATTERN.sub("", symbol_name)
+                    base_name = canonical_part_name(symbol_name)
                     if base_name in symbols_to_delete:
                         deleted_count += 1
                         continue
@@ -1460,7 +1696,12 @@ def purge_zip_contents(zip_path: Path):
     # remove .kicad_mod footprints
     deleted_fp_count = 0
     stems_checked = set()
-    stems_to_check = original_footprint_stems.union(symbols_to_delete)
+    stems_to_check = set()
+    for stem in original_footprint_stems.union(symbols_to_delete):
+        c = canonical_part_name(stem)
+        stems_to_check.add(stem)
+        stems_to_check.add(c)
+        stems_to_check.add(f"LIB_{c}")
 
     for stem in stems_to_check:
         fp_path = PROJECT_FOOTPRINT_LIB / (stem + ".kicad_mod")
@@ -1476,7 +1717,12 @@ def purge_zip_contents(zip_path: Path):
 
     # remove .stp models
     deleted_3d_count = 0
-    stems_to_check = original_stp_stems.union(symbols_to_delete)
+    stems_to_check = set()
+    for stem in original_stp_stems.union(symbols_to_delete):
+        c = canonical_part_name(stem)
+        stems_to_check.add(stem)
+        stems_to_check.add(c)
+        stems_to_check.add(f"LIB_{c}")
     for stem in stems_to_check:
         stp_path = PROJECT_3D_DIR / (stem + ".stp")
         if stp_path.exists():
@@ -1733,15 +1979,24 @@ else:
         raise RuntimeError("No KiCad project (*.kicad_pro) found.")
 
 PROJECT_DIR = project_file.parent
-PROJECT_SYMBOL_LIB = PROJECT_DIR / "symbols" / "ProjectSymbols.kicad_sym"
-PROJECT_FOOTPRINT_LIB = PROJECT_DIR / "footprints" / "ProjectFootprints.pretty"
-PROJECT_3D_DIR = PROJECT_DIR / "3dmodels"
+project_symbol_lib_name = os.getenv(
+    "KLM_SYMBOL_LIB", "../data/symbols/ProjectSymbols.kicad_sym"
+)
+PROJECT_SYMBOL_LIB = (PROJECT_DIR / project_symbol_lib_name).resolve()
+project_footprint_dir_name = os.getenv(
+    "KLM_FOOTPRINT_DIR", "../data/footprints/ProjectFootprints.pretty"
+)
+PROJECT_FOOTPRINT_LIB = (PROJECT_DIR / project_footprint_dir_name).resolve()
 PROJECT_FOOTPRINT_LIB_NAME = PROJECT_FOOTPRINT_LIB.stem
 
 data_root_name = os.getenv("KLM_DATA_DIR", "klm_data")
-KLM_DATA_DIR = PROJECT_DIR / data_root_name
+KLM_DATA_DIR = (PROJECT_DIR / data_root_name).resolve()
+project_3d_dir_name = os.getenv("KLM_3D_DIR", "../data/3dmodels")
+PROJECT_3D_DIR = (PROJECT_DIR / project_3d_dir_name).resolve()
 input_folder_name = os.getenv("INPUT_ZIP_FOLDER", "library_input")
 INPUT_ZIP_FOLDER = KLM_DATA_DIR / input_folder_name
+OUTPUT_ZIP_FOLDER = KLM_DATA_DIR / "library_output"
+IMAGE_FOLDER = KLM_DATA_DIR / "images"
 
 TEMP_MAP_FILE = INPUT_ZIP_FOLDER / "footprint_to_symbol_map.json"
 
@@ -1750,3 +2005,7 @@ os.makedirs(PROJECT_FOOTPRINT_LIB, exist_ok=True)
 os.makedirs(PROJECT_3D_DIR, exist_ok=True)
 os.makedirs(KLM_DATA_DIR, exist_ok=True)
 os.makedirs(INPUT_ZIP_FOLDER, exist_ok=True)
+os.makedirs(OUTPUT_ZIP_FOLDER, exist_ok=True)
+os.makedirs(IMAGE_FOLDER, exist_ok=True)
+ensure_project_library_tables()
+normalize_project_symbol_footprint_links()

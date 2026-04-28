@@ -42,6 +42,16 @@ class KiCadLibraryManager(pcbnew.ActionPlugin):
 
         os.environ["KLM_PROJECT_DIR"] = str(project_dir)
         os.environ["KLM_BASE_PATH"] = str(project_dir)
+        # Default runtime data one level above project dir unless overridden by env.
+        os.environ.setdefault("KLM_DATA_DIR", "../data/klm_data")
+        # Store 3D models in shared global folder unless overridden by env.
+        os.environ.setdefault("KLM_3D_DIR", "../data/3dmodels")
+        # Store symbols in shared global folder unless overridden by env.
+        os.environ.setdefault("KLM_SYMBOL_LIB", "../data/symbols/ProjectSymbols.kicad_sym")
+        # Store imported footprints in shared global folder unless overridden by env.
+        os.environ.setdefault(
+            "KLM_FOOTPRINT_DIR", "../data/footprints/ProjectFootprints.pretty"
+        )
 
         try:
             from . import gui_wx

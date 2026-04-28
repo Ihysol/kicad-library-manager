@@ -50,8 +50,8 @@ except ImportError:
         )
     except ImportError:  # pragma: no cover - fallback for isolated editing
         INPUT_ZIP_FOLDER = Path.cwd() / "klm_data" / "library_input"
-        PROJECT_SYMBOL_LIB = Path.cwd() / "ProjectSymbols.kicad_sym"
-        PROJECT_FOOTPRINT_LIB = Path.cwd() / "ProjectFootprints.pretty"
+        PROJECT_SYMBOL_LIB = (Path.cwd() / ".." / "data" / "symbols" / "ProjectSymbols.kicad_sym").resolve()
+        PROJECT_FOOTPRINT_LIB = (Path.cwd() / ".." / "data" / "footprints" / "ProjectFootprints.pretty").resolve()
 
         def get_existing_main_symbols() -> Set[str]:
             return set()
